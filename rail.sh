@@ -143,58 +143,87 @@ STATIONS=()
 STATION_NORM=()
 STATION_COMPACT=()
 
-# Match keys, computed ONCE per load (not per keystroke) — this is
-# what keeps the picker instant even on slow phones.
+# Match keys, computed ONCE per load in a single awk pass (not one
+# fork per station — that fork storm was the picker lag on phones).
+# Falls back to the bash loop only when awk is missing.
 build_station_keys() {
     STATION_NORM=()
     STATION_COMPACT=()
-    local s
-    for s in "${STATIONS[@]}"; do
-        STATION_NORM+=("$(norm "$(strip_possessive "$s")")")
-        STATION_COMPACT+=("$(norm_compact "$(strip_possessive "$s")")")
-    done
+    local keylines n c
+    if command -v awk >/dev/null 2>&1; then
+        local aq
+        aq="$(printf '\x27')"
+        keylines="$(printf '%s\n' "${STATIONS[@]}" | awk -v q="$aq" '
+            NF == 0 { next }
+            {
+                s = $0
+                gsub(q "[sS]", "", s)
+                n = tolower(s)
+                gsub(q, "", n)
+                gsub(/^ +| +$/, "", n)
+                c = n
+                gsub(/[ _-]/, "", c)
+                print n "\t" c
+            }')"
+        while IFS=$'\t' read -r n c; do
+            STATION_NORM+=("$n")
+            STATION_COMPACT+=("$c")
+        done <<< "$keylines"
+    else
+        local s
+        for s in "${STATIONS[@]}"; do
+            STATION_NORM+=("$(norm "$(strip_possessive "$s")")")
+            STATION_COMPACT+=("$(norm_compact "$(strip_possessive "$s")")")
+        done
+    fi
 }
 
-load_stations() {
-    STATIONS=()
-    local src="" line tmp mtime
-    local now age
+# Best-effort cache refresh: short timeouts, atomic replace, safe to
+# run in the background at startup while the first questions print.
+fetch_stations_cache() {
+    [[ -n "${STATIONS_URL:-}" ]] || return 1
+    local tmp now mtime age
     now="$(date +%s 2>/dev/null || echo 0)"
     age=999999999
     if [[ -s "$STATIONS_CACHE" ]]; then
         mtime="$(stat -c%Y "$STATIONS_CACHE" 2>/dev/null || stat -f%m "$STATIONS_CACHE" 2>/dev/null || echo 0)"
         [[ "$mtime" =~ ^[0-9]+$ ]] && [[ "$now" =~ ^[0-9]+$ ]] && age=$((now - mtime))
+        (( age < STATIONS_MAX_AGE )) && return 0
     fi
-    if [[ -s "$STATIONS_CACHE" ]] && (( age < STATIONS_MAX_AGE )); then
-        src="$STATIONS_CACHE"
+    tmp="$(mktemp "${STATIONS_CACHE}.XXXXXX" 2>/dev/null || mktemp)"
+    if command -v curl >/dev/null 2>&1; then
+        curl --silent --location --fail --connect-timeout 5 --max-time 12 \
+            "$STATIONS_URL" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget --quiet --timeout=12 -O "$tmp" "$STATIONS_URL" 2>/dev/null || { rm -f "$tmp"; return 1; }
     else
-        tmp="$(mktemp)"
-        if { command -v curl >/dev/null 2>&1 && curl --silent --location --fail --retry 1 --connect-timeout 10 --max-time 30 "$STATIONS_URL" -o "$tmp" 2>/dev/null; } || \
-           { command -v wget >/dev/null 2>&1 && wget --quiet --tries=1 --timeout=30 -O "$tmp" "$STATIONS_URL" 2>/dev/null; }; then
-            if [[ -s "$tmp" ]] && (( $(wc -l < "$tmp" 2>/dev/null || echo 0) >= 100 )); then
-                mv "$tmp" "$STATIONS_CACHE"
-                chmod 600 "$STATIONS_CACHE" 2>/dev/null || true
-                src="$STATIONS_CACHE"
-            else
-                rm -f "$tmp"
-            fi
-        else
-            rm -f "$tmp"
-        fi
-        if [[ -z "$src" ]]; then
-            if [[ -s "$STATIONS_CACHE" ]]; then
-                src="$STATIONS_CACHE"
-            else
-                STATIONS=("${CORE_STATIONS[@]}")
-                build_station_keys
-                return 0
-            fi
-        fi
+        rm -f "$tmp"
+        return 1
     fi
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-        [[ -n "$line" ]] && STATIONS+=("$line")
-    done < "$src"
+    if [[ -s "$tmp" ]] && (( $(wc -l < "$tmp" 2>/dev/null || echo 0) >= 100 )); then
+        mv "$tmp" "$STATIONS_CACHE"
+        chmod 600 "$STATIONS_CACHE" 2>/dev/null || true
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+load_stations() {
+    STATIONS=()
+    # Any cache (even stale — the background refresh updates it)
+    # beats waiting on the network inside a prompt. Only a true
+    # first run with no cache ever waits, and only briefly.
+    if [[ ! -s "$STATIONS_CACHE" ]]; then
+        fetch_stations_cache || true
+    fi
+    if [[ -s "$STATIONS_CACHE" ]]; then
+        local line
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [[ -n "$line" ]] && STATIONS+=("$line")
+        done < "$STATIONS_CACHE"
+    fi
     (( ${#STATIONS[@]} > 0 )) || STATIONS=("${CORE_STATIONS[@]}")
     build_station_keys
 }
@@ -614,25 +643,28 @@ ensure_pager_tone() {
         return 0
     fi
     # Stale/partial file (e.g. an HTML error page) — drop it and refetch.
+    # Tmp name is per-process: a background prefetch and the alarm-time
+    # check may run curl at the same moment without clobbering.
+    local ptmp="${PAGER_FILE}.tmp.${BASHPID:-$$}"
     rm -f "$PAGER_FILE" "$PAGER_FILE.tmp"
     [[ -z "${PAGER_URL:-}" ]] && return 1
     local ok=1
     if command -v curl >/dev/null 2>&1; then
         curl --silent --location --fail --retry 2 --connect-timeout 10 --max-time 60 \
-            "$PAGER_URL" -o "$PAGER_FILE.tmp" 2>/dev/null || ok=0
+            "$PAGER_URL" -o "$ptmp" 2>/dev/null || ok=0
     elif command -v wget >/dev/null 2>&1; then
-        wget --quiet --tries=2 --timeout=60 -O "$PAGER_FILE.tmp" "$PAGER_URL" 2>/dev/null || ok=0
+        wget --quiet --tries=2 --timeout=60 -O "$ptmp" "$PAGER_URL" 2>/dev/null || ok=0
     else
         return 1
     fi
-    if (( ok == 1 )) && [[ -s "$PAGER_FILE.tmp" ]]; then
-        mv "$PAGER_FILE.tmp" "$PAGER_FILE"
+    if (( ok == 1 )) && [[ -s "$ptmp" ]]; then
+        mv "$ptmp" "$PAGER_FILE"
         local bytes
         bytes=$(stat -c%s "$PAGER_FILE" 2>/dev/null || stat -f%z "$PAGER_FILE" 2>/dev/null || echo 0)
         (( bytes >= PAGER_MIN_BYTES )) && return 0
         rm -f "$PAGER_FILE"
     fi
-    rm -f "$PAGER_FILE.tmp"
+    rm -f "$ptmp"
     return 1
 }
 
@@ -873,10 +905,10 @@ confirm_search_params() {
             TO="$(pick_station "To city" "")" || exit 1
             set_url_param "to_city" "$TO"
         fi
+        # Seat class is NOT asked here: the numbered class options
+        # shown after train selection already cover it.
         if [[ -z "$SEAT_CLASS" ]]; then
-            ask "Seat class (type a name like S_CHAIR, or ALL): " SEAT_CLASS || exit 1
-            SEAT_CLASS="$(printf '%s' "$SEAT_CLASS" | tr '[:lower:]' '[:upper:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            [[ -z "$SEAT_CLASS" ]] && SEAT_CLASS="ALL"
+            SEAT_CLASS="ALL"
             set_url_param "seat_class" "$SEAT_CLASS"
         fi
         save_config
@@ -2684,7 +2716,12 @@ echo -e "${N}"
 
 ensure_deps || exit 1
 
-ensure_pager_tone || true
+# Slow network fetches never block the prompts: the tone and the
+# station list refresh in the background while you type. Both are
+# re-checked synchronously exactly when needed (alarm time /
+# station picker), so nothing can be missed.
+ensure_pager_tone >/dev/null 2>&1 &
+fetch_stations_cache >/dev/null 2>&1 &
 
 setup
 
