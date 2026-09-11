@@ -65,37 +65,53 @@ ensure_deps() {
     for cmd in curl jq; do
         command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
-    if (( ${#missing[@]} == 0 )); then
-        return 0
+    if (( ${#missing[@]} > 0 )); then
+        echo -e "${Y}Installing missing dependencies: ${missing[*]}${N}"
+        if is_termux; then
+            if command -v pkg >/dev/null 2>&1; then
+                pkg update -y >/dev/null 2>&1 || true
+                pkg install -y "${missing[@]}" >/dev/null 2>&1 || {
+                    echo -e "${R}pkg install failed.${N}"
+                    return 1
+                }
+            else
+                echo -e "${R}pkg not found.${N}"
+                return 1
+            fi
+        elif command -v apt-get >/dev/null 2>&1; then
+            if command -v sudo >/dev/null 2>&1 && [[ "$(id -u)" -ne 0 ]]; then
+                sudo apt-get update >/dev/null 2>&1 || true
+                sudo apt-get install -y "${missing[@]}" >/dev/null 2>&1 || return 1
+            else
+                apt-get update >/dev/null 2>&1 || true
+                apt-get install -y "${missing[@]}" >/dev/null 2>&1 || return 1
+            fi
+        else
+            echo -e "${R}Missing: ${missing[*]}. Please install them manually.${N}"
+            return 1
+        fi
+        for cmd in "${missing[@]}"; do
+            command -v "$cmd" >/dev/null 2>&1 || {
+                echo -e "${R}Could not install $cmd.${N}"
+                return 1
+            }
+        done
+        echo -e "${G}Deps ready.${N}"
     fi
-    echo -e "${Y}Installing missing dependencies: ${missing[*]}${N}"
+    # Termux:API bridge (vibration/alerts). Installed on demand when
+    # missing — the monitor still runs without it, just quieter.
     if is_termux; then
-        if command -v pkg >/dev/null 2>&1; then
-            pkg update -y >/dev/null 2>&1 || true
-            pkg install -y "${missing[@]}" termux-api >/dev/null 2>&1 || pkg install -y "${missing[@]}"
-        else
-            echo -e "${R}pkg not found.${N}"
-            return 1
+        if ! command -v termux-notification >/dev/null 2>&1 || \
+           ! command -v termux-vibrate >/dev/null 2>&1; then
+            if command -v pkg >/dev/null 2>&1; then
+                pkg install -y termux-api >/dev/null 2>&1 || true
+            fi
+            if ! command -v termux-notification >/dev/null 2>&1; then
+                echo -e "${Y}Termux:API unavailable — install the Termux:API app + 'pkg install termux-api' for vibration/alerts.${N}"
+            fi
         fi
-    elif command -v apt-get >/dev/null 2>&1; then
-        if command -v sudo >/dev/null 2>&1 && [[ "$(id -u)" -ne 0 ]]; then
-            sudo apt-get update >/dev/null 2>&1 || true
-            sudo apt-get install -y "${missing[@]}" >/dev/null 2>&1 || return 1
-        else
-            apt-get update >/dev/null 2>&1 || true
-            apt-get install -y "${missing[@]}" >/dev/null 2>&1 || return 1
-        fi
-    else
-        echo -e "${R}Missing: ${missing[*]}. Please install them manually.${N}"
-        return 1
     fi
-    for cmd in "${missing[@]}"; do
-        command -v "$cmd" >/dev/null 2>&1 || {
-            echo -e "${R}Could not install $cmd.${N}"
-            return 1
-        }
-    done
-    echo -e "${G}Deps ready.${N}"
+    return 0
 }
 
 # ============================================================
@@ -124,6 +140,20 @@ STATIONS_MAX_AGE=86400 # seconds (1 day)
 CORE_STATIONS=(Dhaka Chattogram Khulna Rajshahi Sylhet Rangpur Mymensingh Jashore Dinajpur)
 
 STATIONS=()
+STATION_NORM=()
+STATION_COMPACT=()
+
+# Match keys, computed ONCE per load (not per keystroke) — this is
+# what keeps the picker instant even on slow phones.
+build_station_keys() {
+    STATION_NORM=()
+    STATION_COMPACT=()
+    local s
+    for s in "${STATIONS[@]}"; do
+        STATION_NORM+=("$(norm "$(strip_possessive "$s")")")
+        STATION_COMPACT+=("$(norm_compact "$(strip_possessive "$s")")")
+    done
+}
 
 load_stations() {
     STATIONS=()
@@ -138,7 +168,6 @@ load_stations() {
     if [[ -s "$STATIONS_CACHE" ]] && (( age < STATIONS_MAX_AGE )); then
         src="$STATIONS_CACHE"
     else
-        echo -e "${C}Fetching station list...${N}" >&2
         tmp="$(mktemp)"
         if { command -v curl >/dev/null 2>&1 && curl --silent --location --fail --retry 1 --connect-timeout 10 --max-time 30 "$STATIONS_URL" -o "$tmp" 2>/dev/null; } || \
            { command -v wget >/dev/null 2>&1 && wget --quiet --tries=1 --timeout=30 -O "$tmp" "$STATIONS_URL" 2>/dev/null; }; then
@@ -146,22 +175,18 @@ load_stations() {
                 mv "$tmp" "$STATIONS_CACHE"
                 chmod 600 "$STATIONS_CACHE" 2>/dev/null || true
                 src="$STATIONS_CACHE"
-                echo -e "${G}✓ Station list updated ($(wc -l < "$STATIONS_CACHE") stations).${N}" >&2
             else
-                echo -e "${Y}Station list download looks wrong — keeping previous data.${N}" >&2
                 rm -f "$tmp"
             fi
         else
-            echo -e "${Y}Station list download failed.${N}" >&2
             rm -f "$tmp"
         fi
         if [[ -z "$src" ]]; then
             if [[ -s "$STATIONS_CACHE" ]]; then
-                echo -e "${Y}Using cached station list.${N}" >&2
                 src="$STATIONS_CACHE"
             else
-                echo -e "${Y}No cache — using built-in major stations (offline mode).${N}" >&2
                 STATIONS=("${CORE_STATIONS[@]}")
+                build_station_keys
                 return 0
             fi
         fi
@@ -171,6 +196,7 @@ load_stations() {
         [[ -n "$line" ]] && STATIONS+=("$line")
     done < "$src"
     (( ${#STATIONS[@]} > 0 )) || STATIONS=("${CORE_STATIONS[@]}")
+    build_station_keys
 }
 
 # 1 when /dev/tty can actually be opened (a real terminal is
@@ -231,24 +257,24 @@ strip_possessive() {
 # All stations containing the query (case-insensitive; spaces,
 # underscores, hyphens and apostrophes ignored), one per line.
 station_matches() {
-    local ql qlc s sn sc
+    local ql qlc i
+    (( ${#STATION_NORM[@]} == ${#STATIONS[@]} )) || build_station_keys
     ql="$(norm "$(strip_possessive "$1")")"
     qlc="$(norm_compact "$(strip_possessive "$1")")"
     [[ -z "$ql" ]] && return 1
-    for s in "${STATIONS[@]}"; do
-        sn="$(norm "$(strip_possessive "$s")")"
-        if [[ "$sn" == *"$ql"* ]]; then
-            printf '%s\n' "$s"
-        else
-            sc="$(norm_compact "$(strip_possessive "$s")")"
-            [[ "$sc" == *"$qlc"* ]] && printf '%s\n' "$s"
+    for ((i=0; i<${#STATIONS[@]}; i++)); do
+        if [[ "${STATION_NORM[$i]}" == *"$ql"* ]]; then
+            printf '%s\n' "${STATIONS[$i]}"
+        elif [[ "${STATION_COMPACT[$i]}" == *"$qlc"* ]]; then
+            printf '%s\n' "${STATIONS[$i]}"
         fi
     done
 }
 
-# Interactive station picker: type any part of the name, pick a
-# number when several match. Always returns canonical spelling.
-# No fuzzy "did you mean" guessing — a miss just asks again.
+# Interactive station picker: type any part of the name, then pick
+# a number from the options. Never auto-selects — even a single
+# hit is shown as option 1 to confirm (unless it is the saved
+# value, kept via [keep: ...]). Always returns canonical spelling.
 pick_station() {
     local prompt="$1" current="$2"
     local q="" i n
@@ -283,18 +309,17 @@ pick_station() {
             ask "Station: " q || return 1
             continue
         fi
-        if (( n == 1 )); then
-            echo -e "${G}✓ Using station: ${matches[0]}${N}" >&2
-            printf '%s' "${matches[0]}"
-            return 0
-        fi
         if (( n > 20 )); then
             echo -e "${Y}${n} stations match '$q' — too many, type more letters.${N}" >&2
             matches=()
             ask "Narrow it down: " q || return 1
             continue
         fi
-        echo -e "${Y}${n} stations match — pick a number:${N}" >&2
+        if (( n == 1 )); then
+            echo -e "${Y}1 station matches:${N}" >&2
+        else
+            echo -e "${Y}${n} stations match — pick a number:${N}" >&2
+        fi
         for ((i=0; i<n; i++)); do
             echo -e "  ${C}$((i+1)))${N} ${matches[i]}" >&2
         done
@@ -591,7 +616,6 @@ ensure_pager_tone() {
     # Stale/partial file (e.g. an HTML error page) — drop it and refetch.
     rm -f "$PAGER_FILE" "$PAGER_FILE.tmp"
     [[ -z "${PAGER_URL:-}" ]] && return 1
-    echo -e "${C}Fetching alert tone from:${N} $PAGER_URL"
     local ok=1
     if command -v curl >/dev/null 2>&1; then
         curl --silent --location --fail --retry 2 --connect-timeout 10 --max-time 60 \
@@ -599,21 +623,14 @@ ensure_pager_tone() {
     elif command -v wget >/dev/null 2>&1; then
         wget --quiet --tries=2 --timeout=60 -O "$PAGER_FILE.tmp" "$PAGER_URL" 2>/dev/null || ok=0
     else
-        echo -e "${Y}No curl/wget — alarm will use vibration + notification sound only.${N}"
         return 1
     fi
     if (( ok == 1 )) && [[ -s "$PAGER_FILE.tmp" ]]; then
         mv "$PAGER_FILE.tmp" "$PAGER_FILE"
         local bytes
         bytes=$(stat -c%s "$PAGER_FILE" 2>/dev/null || stat -f%z "$PAGER_FILE" 2>/dev/null || echo 0)
-        if (( bytes >= PAGER_MIN_BYTES )); then
-            echo -e "${G}✓ Alert tone ready (${bytes} bytes).${N}"
-            return 0
-        fi
-        echo -e "${Y}Downloaded tone too small (${bytes}b) — ignoring.${N}"
+        (( bytes >= PAGER_MIN_BYTES )) && return 0
         rm -f "$PAGER_FILE"
-    else
-        echo -e "${Y}Could not download alert tone — alarm will use vibration + notification sound only.${N}"
     fi
     rm -f "$PAGER_FILE.tmp"
     return 1
@@ -838,6 +855,39 @@ set_url_param() {
 # ============================================================
 
 confirm_search_params() {
+
+    # No saved data yet: ask for each missing field directly
+    # instead of showing blanks behind a yes/no gate.
+    if [[ -z "$FROM" || -z "$TO" || -z "$DATE" || -z "$SEAT_CLASS" ]]; then
+        echo
+        echo -e "${W}Enter search details:${N}"
+        if [[ -z "$DATE" ]]; then
+            DATE="$(ask_date "Date of journey (e.g. 22-04-26 or 22-Apr-2026): " "")" || exit 1
+            set_url_param "date_of_journey" "$DATE"
+        fi
+        if [[ -z "$FROM" ]]; then
+            FROM="$(pick_station "From city" "")" || exit 1
+            set_url_param "from_city" "$FROM"
+        fi
+        if [[ -z "$TO" ]]; then
+            TO="$(pick_station "To city" "")" || exit 1
+            set_url_param "to_city" "$TO"
+        fi
+        if [[ -z "$SEAT_CLASS" ]]; then
+            ask "Seat class (type a name like S_CHAIR, or ALL): " SEAT_CLASS || exit 1
+            SEAT_CLASS="$(printf '%s' "$SEAT_CLASS" | tr '[:lower:]' '[:upper:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [[ -z "$SEAT_CLASS" ]] && SEAT_CLASS="ALL"
+            set_url_param "seat_class" "$SEAT_CLASS"
+        fi
+        save_config
+        echo
+        echo -e "${G}✓ Search details saved:${N}"
+        echo -e "  From:  $FROM"
+        echo -e "  To:    $TO"
+        echo -e "  Date:  $DATE"
+        echo -e "  Class: $SEAT_CLASS"
+        return 0
+    fi
 
     echo
     echo -e "${Y}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
@@ -1699,6 +1749,11 @@ select_trains() {
 
     local count="${#TRAIN_JSON[@]}"
 
+    if (( count == 0 )); then
+        echo -e "${R}No trains in this response — check From/To/Date, then retry.${N}"
+        return 1
+    fi
+
     while true; do
 
         echo -e "${Y}Enter train numbers separated by spaces, or type train names.${N}"
@@ -1855,6 +1910,11 @@ discover_classes() {
 select_classes() {
 
     local count="${#CLASS_NAMES[@]}"
+
+    if (( count == 0 )); then
+        echo -e "${R}No seat classes in this response — check From/To/Date, then retry.${N}"
+        return 1
+    fi
 
     while true; do
 
@@ -2291,30 +2351,6 @@ classes_selection_valid() {
     return 0
 }
 
-# Use the configured SEAT_CLASS directly when it matches the live
-# list (ALL = every class) instead of asking twice.
-auto_use_seat_class() {
-    local want c
-    want="$(norm "$SEAT_CLASS")"
-    if [[ -z "$want" || "$want" == "all" ]]; then
-        WANTED_CLASSES=("${CLASS_NAMES[@]}")
-        save_config
-        echo
-        echo -e "${G}✓ Watching all seat classes.${N}"
-        return 0
-    fi
-    for c in "${CLASS_NAMES[@]}"; do
-        if [[ "$(norm "$c")" == "$want" ]]; then
-            WANTED_CLASSES=("$c")
-            save_config
-            echo
-            echo -e "${G}✓ Using seat class: $c${N}"
-            return 0
-        fi
-    done
-    return 1
-}
-
 # ============================================================
 # RECOMMENDATIONS — when the searched route has no seats, the
 # API returns suggested alternate routes in
@@ -2390,11 +2426,14 @@ selftest() {
     t "train id by content" "826" "$(train_id '{"train_model":"826","trip_number":"JAHANABAD EXPRESS (826)"}')"
     t "class name" "S_CHAIR" "$(class_name '{"type":"S_CHAIR"}')"
     STATIONS=(Dhaka Chattogram "Cox's Bazar" Biman_Bandar)
+    build_station_keys
     t "station exact" "Dhaka" "$(station_matches "dhaka")"
     t "station compact spaces" "Cox's Bazar" "$(station_matches "cox bazar")"
     WANTED_CLASSES=("S_CHAIR")
     if matches_class '{"type":"S_CHAIR"}'; then echo "PASS: class match"; else echo "FAIL: class match"; fail=$((fail + 1)); fi
     if matches_class '{"type":"AC_S"}'; then echo "FAIL: class mismatch leaked"; fail=$((fail + 1)); else echo "PASS: class mismatch rejected"; fi
+    pick1="$(printf 'dhaka\n1\n' | ASK_NO_TTY=1 pick_station "P" "" 2>/dev/null)"
+    t "station picker option-pick" "Dhaka" "$pick1"
     # ask() on EOF must return 1 immediately (no hang)
     local v="SENTINEL"
     if ASK_NO_TTY=1 ask "q: " v < /dev/null; then
@@ -2574,7 +2613,7 @@ setup() {
 
         if (( ${#WANTED_CLASSES[@]} == 0 )); then
 
-            auto_use_seat_class || select_classes || exit 1
+            select_classes || exit 1
 
         elif classes_selection_valid; then
 
