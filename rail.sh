@@ -14,17 +14,13 @@ MIN_INTERVAL=8
 DEFAULT_INTERVAL=10
 
 # ============================================================
-# PAGER TONE
-#
-# Optional custom alert tone played alongside the vibration
-# pattern in ring_alarm. Downloaded once and cached locally.
-# Put your REAL GitHub raw .wav URL here (or leave the
-# placeholder — the alarm still works fine without it, using
-# the vibrate pattern + default notification sound only).
+# PAGER TONE (same repo: stations.txt + pager.wav live next
+# to this script on GitHub, fetched as raw files when needed)
 # ============================================================
 
 PAGER_FILE="$HOME/pager.wav"
 PAGER_URL="https://raw.githubusercontent.com/lutfor183/rail-reckon/main/pager.wav"
+PAGER_MIN_BYTES=20000 # a real wav is ~300KB; anything smaller is an error page
 
 # ============================================================
 # COLORS
@@ -114,391 +110,198 @@ norm() {
 }
 
 # ============================================================
-# STATIONS — canonical spelling list (case-insensitive match +
-# autocomplete). Type any substring; exact names match regardless
-# of case, so "dhaka", "DHAKA" and "Dhaka" all resolve to Dhaka.
+# STATIONS — loaded from stations.txt in this same GitHub repo
+# (one name per line), cached at $HOME/.rail_stations.txt and
+# refreshed daily. Nothing hardcoded, no code bloat.
 # ============================================================
 
-STATIONS=(
-    "Abdulpur"
-    "Ahsanganj"
-    "Akhaura"
-    "Akkelpur"
-    "Alamdanga"
-    "Amirabad"
-    "Arani"
-    "Ashuganj"
-    "Azampur"
-    "Azim Nagar"
-    "Badarganj"
-    "Bajitpur"
-    "Bajra"
-    "Bamondanga"
-    "Baramchal"
-    "Barhatta"
-    "Barkhata"
-    "Benapole"
-    "Bhairab_Bazar"
-    "Bhanga"
-    "Bhanga_Junction"
-    "Bhanugach"
-    "Bheramara"
-    "Bhuapur"
-    "Bidyaganj"
-    "Biman_Bandar"
-    "Birampur"
-    "Bogura"
-    "Bonar_Para"
-    "Boral_Bridge"
-    "Brahmanbaria"
-    "Burimari"
-    "Chakaria"
-    "Chandpur"
-    "Chandpur_Court"
-    "Chapainawabganj"
-    "Chatmohar"
-    "Chattogram"
-    "Chilahati"
-    "Chirirbandar"
-    "Choumuhani"
-    "Chuadanga"
-    "Cox's Bazar"
-    "Cumilla"
-    "Darshana_Halt"
-    "Daulatpur"
-    "Dewanganj_Bazar"
-    "Dhaka"
-    "Dinajpur"
-    "Dohazari"
-    "Domar"
-    "Dulahazara"
-    "Faridpur"
-    "Feni"
-    "Fulbari"
-    "Gachihata"
-    "Gafargaon"
-    "Gaibandha"
-    "GOMDANDI"
-    "Gouripur_Myn"
-    "Gunabati"
-    "Hajiganj"
-    "Harashpur"
-    "HARBANG"
-    "Hasanpur"
-    "Hatibandha"
-    "Ibrahimabad"
-    "Ishwardi"
-    "Ishwardi Bypass"
-    "ISLAMABAD"
-    "Islampur_Bazar"
-    "Jamalpur_Town"
-    "Jamtail"
-    "Janali_Hat"
-    "Jashore"
-    "Jhikargacha"
-    "Joydebpur"
-    "Joypurhat"
-    "Kalukhali"
-    "Kankina"
-    "Kaoraid"
-    "Kashiani"
-    "Kaunia"
-    "Kendua_Bazar"
-    "Khoksha"
-    "Khulna"
-    "Kishorganj"
-    "Kismat"
-    "Kotchandpur"
-    "Kulaura"
-    "Kuliarchar"
-    "Kumarkhali"
-    "Kumira"
-    "Kurigram"
-    "Kushtia_Court"
-    "Laksam"
-    "Lalmonirhat"
-    "LOHAGARA"
-    "Lohagora"
-    "Madhnagar"
-    "Mahimaganj"
-    "Maijdi Court"
-    "Maijgaon"
-    "Manikkhali"
-    "Mawa"
-    "Meher"
-    "Melandah_Bazar"
-    "Methikanda"
-    "Mirpur"
-    "Mirzapur"
-    "Mohanganj"
-    "Montola"
-    "Mubarakganj"
-    "Muksudpur"
-    "Mukundapur"
-    "Muladhuli"
-    "Mymensingh"
-    "Nandina"
-    "Nangolkot"
-    "Narail"
-    "Narsingdi"
-    "Narundi"
-    "Natherpetua"
-    "Natore"
-    "Nayapara"
-    "Netrakona"
-    "Nilphamari"
-    "Noakhali"
-    "Noapara"
-    "Pachuria"
-    "Padma"
-    "Paksey"
-    "Panchagarh"
-    "Panchbibi"
-    "Pangsha"
-    "Parbatipur"
-    "Patgram"
-    "Patiya"
-    "Pirgacha"
-    "Pirganj"
-    "Piyarpur"
-    "Poradaha"
-    "Pukuria"
-    "Quasba"
-    "Rajbari"
-    "Rajshahi"
-    "Ramu"
-    "Rangpur"
-    "Ruhia"
-    "Safdarpur"
-    "Saidpur"
-    "Santahar"
-    "Sararchar"
-    "Sardah_Road"
-    "Sarishabari"
-    "Satkania"
-    "Setabganj"
-    "SH M Monsur Ali"
-    "Shahaji_Bazar"
-    "Shaistaganj"
-    "Shamshernagar"
-    "Shashidal"
-    "Shibchar"
-    "Sholoshohor"
-    "Shyamgonj"
-    "Singia"
-    "Sirajganj_Bazar"
-    "Sirajganjraipur"
-    "Sonaimuri"
-    "Sonatola"
-    "Sreemangal"
-    "Sreenagar"
-    "Sreepur"
-    "Sylhet"
-    "Talma"
-    "Talora"
-    "Tangail"
-    "Tarakandi"
-    "Teesta_Junction"
-    "Thakrokona"
-    "Thakurgaon_Road"
-    "Tushbhandar"
-    "Ullapara"
-)
+STATIONS_URL="https://raw.githubusercontent.com/lutfor183/rail-reckon/main/stations.txt"
+STATIONS_CACHE="$HOME/.rail_stations.txt"
+STATIONS_MAX_AGE=86400 # seconds (1 day)
 
-# Read one line: from /dev/tty when available, else stdin.
-tty_read() {
-    local prompt="$1" var="$2"
-    local _l=""
-    # /dev/tty may exist but refuse to open (no controlling terminal,
-    # e.g. piped CLI) — silence that and fall back to stdin.
-    if [[ -r /dev/tty ]] && { IFS= read -r -p "$prompt" _l < /dev/tty; } 2>/dev/null; then
-        printf -v "$var" '%s' "$_l"
-        return 0
+# Offline fallback: major stations only, used when neither the
+# cache nor GitHub is reachable.
+CORE_STATIONS=(Dhaka Chattogram Khulna Rajshahi Sylhet Rangpur Mymensingh Jashore Dinajpur)
+
+STATIONS=()
+
+load_stations() {
+    STATIONS=()
+    local src="" line tmp mtime
+    local now age
+    now="$(date +%s 2>/dev/null || echo 0)"
+    age=999999999
+    if [[ -s "$STATIONS_CACHE" ]]; then
+        mtime="$(stat -c%Y "$STATIONS_CACHE" 2>/dev/null || stat -f%m "$STATIONS_CACHE" 2>/dev/null || echo 0)"
+        [[ "$mtime" =~ ^[0-9]+$ ]] && [[ "$now" =~ ^[0-9]+$ ]] && age=$((now - mtime))
     fi
-    if IFS= read -r -p "$prompt" _l; then
-        printf -v "$var" '%s' "$_l"
-        return 0
+    if [[ -s "$STATIONS_CACHE" ]] && (( age < STATIONS_MAX_AGE )); then
+        src="$STATIONS_CACHE"
+    else
+        echo -e "${C}Fetching station list...${N}" >&2
+        tmp="$(mktemp)"
+        if { command -v curl >/dev/null 2>&1 && curl --silent --location --fail --retry 1 --connect-timeout 10 --max-time 30 "$STATIONS_URL" -o "$tmp" 2>/dev/null; } || \
+           { command -v wget >/dev/null 2>&1 && wget --quiet --tries=1 --timeout=30 -O "$tmp" "$STATIONS_URL" 2>/dev/null; }; then
+            if [[ -s "$tmp" ]] && (( $(wc -l < "$tmp" 2>/dev/null || echo 0) >= 100 )); then
+                mv "$tmp" "$STATIONS_CACHE"
+                chmod 600 "$STATIONS_CACHE" 2>/dev/null || true
+                src="$STATIONS_CACHE"
+                echo -e "${G}✓ Station list updated ($(wc -l < "$STATIONS_CACHE") stations).${N}" >&2
+            else
+                echo -e "${Y}Station list download looks wrong — keeping previous data.${N}" >&2
+                rm -f "$tmp"
+            fi
+        else
+            echo -e "${Y}Station list download failed.${N}" >&2
+            rm -f "$tmp"
+        fi
+        if [[ -z "$src" ]]; then
+            if [[ -s "$STATIONS_CACHE" ]]; then
+                echo -e "${Y}Using cached station list.${N}" >&2
+                src="$STATIONS_CACHE"
+            else
+                echo -e "${Y}No cache — using built-in major stations (offline mode).${N}" >&2
+                STATIONS=("${CORE_STATIONS[@]}")
+                return 0
+            fi
+        fi
     fi
-    printf -v "$var" '%s' "$_l"
-    return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [[ -n "$line" ]] && STATIONS+=("$line")
+    done < "$src"
+    (( ${#STATIONS[@]} > 0 )) || STATIONS=("${CORE_STATIONS[@]}")
+}
+
+# 1 when /dev/tty can actually be opened (a real terminal is
+# attached); 0 when piped/backgrounded. Probed once at startup —
+# [[ -r /dev/tty ]] alone is not enough: the node can exist yet
+# refuse to open ("No such device or address"), which used to
+# spam errors and break every prompt.
+HAVE_TTY=0
+if { true < /dev/tty; } 2>/dev/null; then
+    HAVE_TTY=1
+fi
+
+# ============================================================
+# ASK — every question is printed where the user can always see
+# it (terminal, or stderr when there is no /dev/tty), and EOF
+# returns 1 instead of hanging in an endless loop.
+# ============================================================
+
+# ask PROMPT VAR — print PROMPT, read one line into VAR.
+ask() {
+    local prompt="$1" var="$2" val="" rc=0
+    if [[ -z "${ASK_NO_TTY:-}" ]] && (( HAVE_TTY == 1 )); then
+        printf '%s' "$prompt" > /dev/tty
+    else
+        printf '%s' "$prompt" >&2
+    fi
+    if [[ -z "${ASK_NO_TTY:-}" ]] && (( HAVE_TTY == 1 )); then
+        IFS= read -r val < /dev/tty || rc=1
+    else
+        IFS= read -r val || rc=1
+    fi
+    printf -v "$var" '%s' "$val"
+    return $rc
+}
+
+# ask_key TIMEOUT VAR — single keypress within TIMEOUT seconds.
+# Returns 1 on timeout/EOF. Never prints errors.
+ask_key() {
+    local timeout="$1" var="$2" val=""
+    (( HAVE_TTY == 1 )) || return 1
+    IFS= read -r -t "$timeout" -n 1 val < /dev/tty 2>/dev/null || { printf -v "$var" '%s' ""; return 1; }
+    printf -v "$var" '%s' "$val"
+    return 0
 }
 
 # Compact form: lowercase, no spaces/underscores/hyphens/apostrophes.
-# Catches "cox bazar", "Cox-Bazar", "bimanbandar" style typos.
+# Catches "cox bazar", "Cox-Bazar", "bimanbandar" style input.
 norm_compact() {
     norm "$1" | tr -d ' _-'
 }
 
-# Canonical spelling for an exact (case-insensitive) station name.
-station_canonical() {
-    local want s
-    want="$(norm "$1")"
-    [[ -z "$want" ]] && return 1
-    for s in "${STATIONS[@]}"; do
-        if [[ "$(norm "$s")" == "$want" ]]; then
-            printf '%s' "$s"
-            return 0
-        fi
-    done
-    return 1
+# "Cox's Bazar" -> "Cox Bazar", so typing "cox bazar" (the
+# natural input, without apostrophe) still matches.
+strip_possessive() {
+    printf '%s' "$1" | sed "s/'[sS]//g"
 }
 
-# All stations containing the query (case-insensitive), one per line.
+# All stations containing the query (case-insensitive; spaces,
+# underscores, hyphens and apostrophes ignored), one per line.
 station_matches() {
-    local ql s
-    ql="$(norm "$1")"
+    local ql qlc s sn sc
+    ql="$(norm "$(strip_possessive "$1")")"
+    qlc="$(norm_compact "$(strip_possessive "$1")")"
     [[ -z "$ql" ]] && return 1
     for s in "${STATIONS[@]}"; do
-        [[ "$(norm "$s")" == *"$ql"* ]] && printf '%s\n' "$s"
-    done
-}
-
-# Exact match on compact form ("cox bazar" -> Cox's Bazar).
-station_compact_exact() {
-    local want s
-    want="$(norm_compact "$1")"
-    [[ -z "$want" ]] && return 1
-    for s in "${STATIONS[@]}"; do
-        if [[ "$(norm_compact "$s")" == "$want" ]]; then
-            printf '%s' "$s"
-            return 0
+        sn="$(norm "$(strip_possessive "$s")")"
+        if [[ "$sn" == *"$ql"* ]]; then
+            printf '%s\n' "$s"
+        else
+            sc="$(norm_compact "$(strip_possessive "$s")")"
+            [[ "$sc" == *"$qlc"* ]] && printf '%s\n' "$s"
         fi
     done
-    return 1
-}
-
-# Substring match on compact form, one per line.
-station_compact_matches() {
-    local ql s sc
-    ql="$(norm_compact "$1")"
-    [[ -z "$ql" ]] && return 1
-    for s in "${STATIONS[@]}"; do
-        sc="$(norm_compact "$s")"
-        [[ "$sc" == *"$ql"* ]] && printf '%s\n' "$s"
-    done
-}
-
-# Typo tolerance: top-3 closest names by edit distance (awk).
-# Prints names to stdout, "did you mean" menu to stderr.
-station_fuzzy_offer() {
-    command -v awk >/dev/null 2>&1 || return 1
-    command -v sort >/dev/null 2>&1 || return 1
-    local qc s out
-    qc="$(norm_compact "$1")"
-    (( ${#qc} >= 3 )) || return 1
-    out="$(
-        for s in "${STATIONS[@]}"; do
-            printf '%s\t%s\n' "$(norm_compact "$s")" "$s"
-        done | awk -F'\t' -v q="$qc" '
-            function lev(a,b, la,lb,i,j,cost,best,pu,cu) {
-                la=length(a); lb=length(b)
-                if (la==0) return lb
-                if (lb==0) return la
-                for (j=0;j<=lb;j++) pu[j]=j
-                for (i=1;i<=la;i++) {
-                    cu[0]=i
-                    for (j=1;j<=lb;j++) {
-                        cost=(substr(a,i,1)==substr(b,j,1))?0:1
-                        best=pu[j]+1
-                        if (cu[j-1]+1<best) best=cu[j-1]+1
-                        if (pu[j-1]+cost<best) best=pu[j-1]+cost
-                        cu[j]=best
-                    }
-                    for (j=0;j<=lb;j++) pu[j]=cu[j]
-                }
-                return pu[lb]
-            }
-            { d=lev($1,q); lim=(length(q)<5)?1:2; if (d<=lim && d>0) print d "\t" $2 }
-        ' | sort -n | head -3 | cut -f2-
-    )"
-    [[ -z "$out" ]] && return 1
-    echo -e "${Y}Did you mean (typo?) — pick a number:${N}" >&2
-    local i=1
-    while IFS= read -r s; do
-        [[ -n "$s" ]] && { echo -e "  ${C}$i)${N} $s" >&2; printf '%s\n' "$s"; i=$((i+1)); }
-    done <<< "$out"
-    return 0
 }
 
 # Interactive station picker: type any part of the name, pick a
 # number when several match. Always returns canonical spelling.
+# No fuzzy "did you mean" guessing — a miss just asks again.
 pick_station() {
     local prompt="$1" current="$2"
-    local q="" canon i max n
+    local q="" i n
     local -a matches=()
-    local first=1
+    (( ${#STATIONS[@]} > 0 )) || load_stations
+    if [[ -n "$current" ]]; then
+        ask "$prompt [keep: $current]: " q || return 1
+        [[ -z "$q" ]] && { printf '%s' "$current"; return 0; }
+    else
+        ask "$prompt (type part of the station name): " q || return 1
+    fi
     while true; do
-        if (( first == 1 )); then
-            first=0
-            if [[ -n "$current" ]]; then
-                tty_read "$prompt [keep: $current]: " q || return 1
-                [[ -z "$q" ]] && { printf '%s' "$current"; return 0; }
-            else
-                tty_read "$prompt: " q || return 1
-            fi
-        else
-            tty_read "Type more letters or pick a number: " q || return 1
-        fi
-        if [[ -z "$q" && -n "$current" ]]; then
-            printf '%s' "$current"
-            return 0
-        fi
-        if [[ "$q" =~ ^[0-9]+$ ]] && (( ${#matches[@]} > 0 )) && (( q >= 1 && q <= max )); then
-            printf '%s' "${matches[$((q-1))]}"
-            return 0
-        fi
         if [[ -z "$q" ]]; then
-            echo -e "${R}Type part of a station name.${N}" >&2
+            if [[ -n "$current" ]]; then
+                printf '%s' "$current"
+                return 0
+            fi
+            ask "Type part of a station name: " q || return 1
             continue
         fi
-        if canon="$(station_canonical "$q")"; then
-            printf '%s' "$canon"
-            return 0
-        fi
-        if canon="$(station_compact_exact "$q")"; then
-            printf '%s' "$canon"
+        if [[ "$q" =~ ^[0-9]+$ ]] && (( ${#matches[@]} > 0 )) && (( q >= 1 && q <= ${#matches[@]} )); then
+            printf '%s' "${matches[$((q-1))]}"
             return 0
         fi
         matches=()
         while IFS= read -r s; do
             [[ -n "$s" ]] && matches+=("$s")
         done < <(station_matches "$q")
-        if (( ${#matches[@]} == 0 )); then
-            while IFS= read -r s; do
-                [[ -n "$s" ]] && matches+=("$s")
-            done < <(station_compact_matches "$q")
-        fi
         n="${#matches[@]}"
         if (( n == 0 )); then
-            local fz
-            if fz="$(station_fuzzy_offer "$q")"; then
-                matches=()
-                while IFS= read -r s; do
-                    [[ -n "$s" ]] && matches+=("$s")
-                done <<< "$fz"
-                max="${#matches[@]}"
-            else
-                echo -e "${R}No station matches '$q'. Check spelling and try again.${N}" >&2
-            fi
+            echo -e "${R}No station matches '$q'. Try again (e.g. 'dha' for Dhaka).${N}" >&2
+            ask "Station: " q || return 1
             continue
         fi
         if (( n == 1 )); then
+            echo -e "${G}✓ Using station: ${matches[0]}${N}" >&2
             printf '%s' "${matches[0]}"
             return 0
         fi
         if (( n > 20 )); then
             echo -e "${Y}${n} stations match '$q' — too many, type more letters.${N}" >&2
             matches=()
+            ask "Narrow it down: " q || return 1
             continue
         fi
-        max=$(( n < 10 ? n : 10 ))
         echo -e "${Y}${n} stations match — pick a number:${N}" >&2
-        for ((i=0; i<max; i++)); do
+        for ((i=0; i<n; i++)); do
             echo -e "  ${C}$((i+1)))${N} ${matches[i]}" >&2
         done
-        (( n > max )) && echo -e "${D}...showing $max of $n — type more letters to narrow.${N}" >&2
+        ask "Pick 1-$n (or type more letters): " q || return 1
     done
 }
+
 # ============================================================
 # DATE NORMALIZE
 #
@@ -609,7 +412,7 @@ ask_date() {
 
     while true; do
 
-        read -r -p "$prompt" v < /dev/tty
+        ask "$prompt" v || return 1
 
         if [[ -z "$v" ]]; then
             [[ -n "$current" ]] && { printf '%s' "$current"; return 0; }
@@ -782,22 +585,37 @@ seat_count() {
 # ============================================================
 
 ensure_pager_tone() {
-    [[ -s "$PAGER_FILE" ]] && return 0
-    [[ -z "${PAGER_URL:-}" ]] && return 1
-    if command -v curl >/dev/null 2>&1; then
-        curl --silent --location --fail --connect-timeout 10 --max-time 60 "$PAGER_URL" -o "$PAGER_FILE.tmp" 2>/dev/null && [[ -s "$PAGER_FILE.tmp" ]] && mv "$PAGER_FILE.tmp" "$PAGER_FILE" || rm -f "$PAGER_FILE.tmp"
-    elif command -v wget >/dev/null 2>&1; then
-        wget --quiet --timeout=60 -O "$PAGER_FILE.tmp" "$PAGER_URL" 2>/dev/null && [[ -s "$PAGER_FILE.tmp" ]] && mv "$PAGER_FILE.tmp" "$PAGER_FILE" || rm -f "$PAGER_FILE.tmp"
-    else
-        return 1
-    fi
-    if [[ -s "$PAGER_FILE" ]]; then
-        if command -v file >/dev/null 2>&1; then
-            file "$PAGER_FILE" 2>/dev/null | grep -qi 'wave\|riff' || { echo -e "${Y}Downloaded tone invalid - ignoring.${N}"; rm -f "$PAGER_FILE"; return 1; }
-        fi
-        echo -e "${G}Alert tone downloaded.${N}"
+    if [[ -s "$PAGER_FILE" ]] && (( $(stat -c%s "$PAGER_FILE" 2>/dev/null || stat -f%z "$PAGER_FILE" 2>/dev/null || echo 0) >= PAGER_MIN_BYTES )); then
         return 0
     fi
+    # Stale/partial file (e.g. an HTML error page) — drop it and refetch.
+    rm -f "$PAGER_FILE" "$PAGER_FILE.tmp"
+    [[ -z "${PAGER_URL:-}" ]] && return 1
+    echo -e "${C}Fetching alert tone from:${N} $PAGER_URL"
+    local ok=1
+    if command -v curl >/dev/null 2>&1; then
+        curl --silent --location --fail --retry 2 --connect-timeout 10 --max-time 60 \
+            "$PAGER_URL" -o "$PAGER_FILE.tmp" 2>/dev/null || ok=0
+    elif command -v wget >/dev/null 2>&1; then
+        wget --quiet --tries=2 --timeout=60 -O "$PAGER_FILE.tmp" "$PAGER_URL" 2>/dev/null || ok=0
+    else
+        echo -e "${Y}No curl/wget — alarm will use vibration + notification sound only.${N}"
+        return 1
+    fi
+    if (( ok == 1 )) && [[ -s "$PAGER_FILE.tmp" ]]; then
+        mv "$PAGER_FILE.tmp" "$PAGER_FILE"
+        local bytes
+        bytes=$(stat -c%s "$PAGER_FILE" 2>/dev/null || stat -f%z "$PAGER_FILE" 2>/dev/null || echo 0)
+        if (( bytes >= PAGER_MIN_BYTES )); then
+            echo -e "${G}✓ Alert tone ready (${bytes} bytes).${N}"
+            return 0
+        fi
+        echo -e "${Y}Downloaded tone too small (${bytes}b) — ignoring.${N}"
+        rm -f "$PAGER_FILE"
+    else
+        echo -e "${Y}Could not download alert tone — alarm will use vibration + notification sound only.${N}"
+    fi
+    rm -f "$PAGER_FILE.tmp"
     return 1
 }
 
@@ -922,12 +740,10 @@ ring_alarm() {
                 printf '\a'
             fi
 
-            if [[ -r /dev/tty ]]; then
-                if read -r -t "$step" -n 1 key < /dev/tty; then
-                    stopped=1
-                    break
-                fi
-            else
+            if ask_key "$step" key; then
+                stopped=1
+                break
+            elif (( HAVE_TTY == 0 )); then
                 sleep "$step"
             fi
 
@@ -961,10 +777,8 @@ ring_alarm() {
 
     echo -e "${C}Press 'e' within 10s to edit search now, or wait to keep monitoring...${N}"
 
-    if [[ -r /dev/tty ]]; then
-        if read -r -t 10 -n 1 key < /dev/tty; then
-            [[ "$key" == "e" || "$key" == "E" ]] && edit_menu || true
-        fi
+    if ask_key 10 key; then
+        [[ "$key" == "e" || "$key" == "E" ]] && edit_menu || true
     else
         sleep 2 || true
     fi
@@ -1035,7 +849,7 @@ confirm_search_params() {
     echo -e "  Class: ${C}${SEAT_CLASS}${N}"
     echo
 
-    read -r -p "Change any of these before scanning? [y/N]: " answer < /dev/tty
+    ask "Change any of these before scanning? [y/N]: " answer || true
 
     case "$answer" in
         y|Y|yes|YES)
@@ -1058,7 +872,8 @@ confirm_search_params() {
                 set_url_param "to_city" "$TO"
             fi
 
-            read -r -p "New seat_class [keep: $SEAT_CLASS]: " v < /dev/tty
+            ask "New seat_class (type a name like S_CHAIR, or ALL) [keep: $SEAT_CLASS]: " v || v=""
+            v="$(printf '%s' "$v" | tr '[:lower:]' '[:upper:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
             if [[ -n "$v" ]]; then
                 SEAT_CLASS="$v"
                 set_url_param "seat_class" "$SEAT_CLASS"
@@ -1290,25 +1105,27 @@ prompt_auth_json() {
         printf '%s' "$1" | sed -e 's/\x1b\[200~//g' -e 's/\x1b\[201~//g' | tr -d '\r'
     }
 
-    if [[ -r /dev/tty ]]; then
-        while IFS= read -r line < /dev/tty || [[ -n "${line:-}" ]]; do
-            line="$(strip_paste_line "$line")"
-            [[ "$(norm "$line")" == "end" ]] && break
-            [[ "$line" == '```'* ]] && continue
-            [[ "$(norm "$line")" == "." ]] && break
-            printf '%s\n' "$line" >> "$tmp"
-            if [[ -z "$line" ]] && [[ -s "$tmp" ]] && jq -e '.url and .headers' "$tmp" >/dev/null 2>&1; then
-                break
-            fi
-        done
-    else
-        while IFS= read -r line || [[ -n "${line:-}" ]]; do
-            line="$(strip_paste_line "$line")"
-            [[ "$(norm "$line")" == "end" ]] && break
-            [[ "$line" == '```'* ]] && continue
-            printf '%s\n' "$line" >> "$tmp"
-        done
-    fi
+    echo -e "${C}Waiting for your paste — long-press -> PASTE the JSON below,${N}"
+    echo -e "${C}then type ${W}END${C} on its own line + Enter.${N}"
+    echo
+
+    local nlines=0
+    while true; do
+        if ! ask "json[$nlines]> " line; then
+            echo
+            break
+        fi
+        line="$(strip_paste_line "$line")"
+        [[ "$(norm "$line")" == "end" ]] && break
+        [[ "$line" == '```'* ]] && continue
+        [[ "$(norm "$line")" == "." ]] && break
+        printf '%s\n' "$line" >> "$tmp"
+        nlines=$((nlines + 1))
+        if [[ -z "$line" ]] && [[ -s "$tmp" ]] && jq -e '.url and .headers' "$tmp" >/dev/null 2>&1; then
+            break
+        fi
+    done
+    echo -e "${D}Received $nlines line(s). Checking...${N}"
 
     if [[ ! -s "$tmp" ]]; then
         rm -f "$tmp"
@@ -1450,7 +1267,7 @@ ask_auth_update() {
     fi
 
     echo
-    read -r -p "Update Auth JSON? [y/N]: " answer < /dev/tty
+    ask "Update Auth JSON? [y/N]: " answer || true
 
     case "$answer" in
         y|Y|yes|YES)
@@ -1471,7 +1288,7 @@ configure_interval() {
     echo
     echo -e "Current interval: ${C}${INTERVAL}s${N}"
 
-    read -r -p "Change interval? [y/N]: " answer < /dev/tty
+    ask "Change interval? [y/N]: " answer || true
 
     case "$answer" in
 
@@ -1479,8 +1296,7 @@ configure_interval() {
 
             while true; do
 
-                read -r -p \
-                    "Enter interval in seconds [${DEFAULT_INTERVAL}]: " value < /dev/tty
+                ask "Enter interval in seconds [${DEFAULT_INTERVAL}]: " value || value=""
 
                 [[ -z "$value" ]] &&
                     value="$DEFAULT_INTERVAL"
@@ -1638,7 +1454,7 @@ ensure_api_works() {
             rm -f "$tmp"
 
             echo -e "${Y}Authentication has expired.${N}"
-            read -r -p "Update Auth JSON? [y/N]: " answer < /dev/tty
+            ask "Update Auth JSON? [y/N]: " answer || true
 
             case "$answer" in
                 y|Y|yes|YES)
@@ -1779,7 +1595,7 @@ edit_menu() {
     echo "  9) Switch method     (currently: ${MODE:-json})"
     echo "  0) Back to monitoring"
     echo
-    read -r -p "Choice: " choice < /dev/tty
+    ask "Choice (0-9): " choice || choice=""
 
     local tmp code
 
@@ -1790,7 +1606,7 @@ edit_menu() {
            [[ -n "$v" ]] && { FROM="$v"; set_url_param "from_city" "$FROM"; save_config; echo -e "${G}✓ Updated.${N}"; } ;;
         3) v="$(pick_station "New to_city" "$TO")"
            [[ -n "$v" ]] && { TO="$v"; set_url_param "to_city" "$TO"; save_config; echo -e "${G}✓ Updated.${N}"; } ;;
-        4) read -r -p "New seat_class (e.g. S_CHAIR, SNIGDHA, AC_S, ALL): " v < /dev/tty
+        4) ask "New seat_class (type a name like S_CHAIR, or ALL): " v || v=""; v="$(printf '%s' "$v" | tr '[:lower:]' '[:upper:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
            [[ -n "$v" ]] && { SEAT_CLASS="$v"; set_url_param "seat_class" "$SEAT_CLASS"; save_config; echo -e "${G}✓ Updated.${N}"; } ;;
         5) tmp="$(mktemp)"; code="$(api_request "$tmp")"
            if [[ "$code" == "200" ]] && discover_trains "$tmp"; then select_trains; else echo -e "${R}Could not refresh trains.${N}"; fi
@@ -1885,13 +1701,12 @@ select_trains() {
 
     while true; do
 
-        echo -e "${Y}Enter train numbers separated by spaces.${N}"
-        echo -e "${D}Example: 1 2${N}"
-        echo -e "${D}Type ALL to monitor every train.${N}"
+        echo -e "${Y}Enter train numbers separated by spaces, or type train names.${N}"
+        echo -e "${D}Example: 1 2  |  JAHANABAD  |  ALL for every train${N}"
         echo
 
         local selection
-        read -r -p "Train selection: " selection < /dev/tty
+        ask "Train selection: " selection || { echo -e "${R}Input closed — keeping previous selection.${N}"; return 1; }
 
         WANTED_TRAINS=()
 
@@ -1936,6 +1751,23 @@ select_trains() {
                     elif [[ -n "$name" ]]; then
                         WANTED_TRAINS+=("$name")
                     fi
+
+                else
+
+                    # Typed text (name or ID) instead of a number — match it.
+                    for obj in "${TRAIN_JSON[@]}"; do
+                        id="$(train_id "$obj")"
+                        name="$(train_name "$obj")"
+                        if { [[ -n "$id" && "$(norm "$id")" == "$(norm "$n")" ]]; } ||
+                           { [[ -n "$name" && "$(norm "$name")" == *"$(norm "$n")"* ]]; }; then
+                            if [[ -n "$id" ]]; then
+                                WANTED_TRAINS+=("$id")
+                            else
+                                WANTED_TRAINS+=("$name")
+                            fi
+                            break
+                        fi
+                    done
 
                 fi
 
@@ -2026,14 +1858,13 @@ select_classes() {
 
     while true; do
 
-        echo -e "${Y}Enter class numbers separated by spaces.${N}"
-        echo -e "${D}Example: 1 2${N}"
-        echo -e "${D}Type ALL to monitor every class.${N}"
+        echo -e "${Y}Enter class numbers, or type class names directly.${N}"
+        echo -e "${D}Example: 1 2  |  S_CHAIR SNIGDHA  |  ALL for every class${N}"
         echo
 
         local selection
 
-        read -r -p "Class selection: " selection < /dev/tty
+        ask "Class selection: " selection || { echo -e "${R}Input closed — keeping previous selection.${N}"; return 1; }
 
         WANTED_CLASSES=()
 
@@ -2055,6 +1886,17 @@ select_classes() {
                     WANTED_CLASSES+=(
                         "${CLASS_NAMES[$((n-1))]}"
                     )
+
+                else
+
+                    # Typed a class name directly — match it (case-insensitive).
+                    local c
+                    for c in "${CLASS_NAMES[@]}"; do
+                        if [[ "$(norm "$c")" == "$(norm "$n")" ]]; then
+                            WANTED_CLASSES+=("$c")
+                            break
+                        fi
+                    done
 
                 fi
 
@@ -2312,7 +2154,7 @@ choose_mode() {
     [[ "$MODE" == "json" ]] && def="2"
     [[ "$MODE" == "free" ]] && def="1"
     local ans=""
-    read -r -p "Choose method [${def}]: " ans < /dev/tty || true
+    ask "Choose method [${def}]: " ans || true
     [[ -z "$ans" ]] && ans="$def"
     case "$ans" in
         1|free|FREE) MODE="free" ;;
@@ -2343,16 +2185,16 @@ ensure_route_set() {
     while [[ -z "$FROM" || -z "$TO" || -z "$DATE" ]]; do
         echo -e "${Y}Route details are needed for searching.${N}"
         if [[ -z "$FROM" ]]; then
-            v="$(pick_station "From city" "")"
+            v="$(pick_station "From city" "")" || { echo -e "${R}Input closed (EOF) — exiting.${N}"; return 1; }
             [[ -n "$v" ]] && FROM="$v"
         fi
         if [[ -z "$TO" ]]; then
-            v="$(pick_station "To city" "")"
+            v="$(pick_station "To city" "")" || { echo -e "${R}Input closed (EOF) — exiting.${N}"; return 1; }
             [[ -n "$v" ]] && TO="$v"
         fi
         if [[ -z "$DATE" ]]; then
             v="$(ask_date "Date of journey (e.g. 22-04-26 or 22-Apr-2026): " "" || true)"
-            [[ -n "$v" ]] && DATE="$v"
+            if [[ -n "$v" ]]; then DATE="$v"; else echo -e "${R}Input closed (EOF) — exiting.${N}"; return 1; fi
         fi
     done
     set_url_param "from_city" "$FROM"
@@ -2386,10 +2228,8 @@ fallback_to_json() {
         echo -e "${W}Previous JSON settings:${N} $FROM → $TO on $DATE"
         echo -e "${D}Press 'e' to edit, 'p' to paste new JSON, Enter to continue.${N}"
         local k=""
-        if [[ -r /dev/tty ]]; then
-            read -r -t 15 -n 1 k < /dev/tty || true
-            echo
-        fi
+        ask_key 15 k || true
+        echo
         if [[ "$k" == "e" || "$k" == "E" ]]; then
             edit_menu
         elif [[ "$k" == "p" || "$k" == "P" ]]; then
@@ -2473,6 +2313,114 @@ auto_use_seat_class() {
         fi
     done
     return 1
+}
+
+# ============================================================
+# RECOMMENDATIONS — when the searched route has no seats, the
+# API returns suggested alternate routes in
+# .data.recommendations. Show them and ask (before monitoring
+# starts) whether they should be watched too.
+# ============================================================
+
+offer_recommendations() {
+    local response="$1"
+    local items count
+    count="$(jq -r '.data.recommendations | length' "$response" 2>/dev/null || echo 0)"
+    [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )) || return 0
+    echo
+    echo -e "${Y}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+    echo -e "${W}No seats yet — but the API suggests these alternates:${N}"
+    echo -e "${Y}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+    local i=1 item label
+    items="$(jq -c '.data.recommendations[]' "$response" 2>/dev/null)"
+    while IFS= read -r item; do
+        [[ -z "$item" ]] && continue
+        label="$(train_name "$item")"
+        if [[ -z "$label" || "$label" == "null" ]]; then
+            label="$(train_id "$item")"
+        fi
+        if [[ -z "$label" || "$label" == "null" ]]; then
+            label="$(jq -r 'tostring' <<< "$item" 2>/dev/null | head -c 120)"
+        fi
+        echo -e "  ${C}$i)${N} $label"
+        ((i++))
+    done <<< "$items"
+    echo
+    local ans=""
+    ask "Watch these suggested routes too? [y/N]: " ans || true
+    case "$ans" in
+        y|Y|yes|YES)
+            while IFS= read -r item; do
+                [[ -z "$item" ]] && continue
+                label="$(train_name "$item")"
+                [[ -z "$label" || "$label" == "null" ]] && label="$(train_id "$item")"
+                if [[ -n "$label" && "$label" != "null" ]]; then
+                    WANTED_TRAINS+=("$label")
+                fi
+            done <<< "$items"
+            echo -e "${G}✓ Added API suggestions to watched trains.${N}"
+            ;;
+    esac
+    return 0
+}
+
+# ============================================================
+# SELFTEST — pure-function checks, no network, no prompts left
+# hanging (stdin-driven via ASK_NO_TTY). Run: ./rail.sh --selftest
+# ============================================================
+
+selftest() {
+    local fail=0
+    t() {
+        if [[ "$2" == "$3" ]]; then
+            echo "PASS: $1"
+        else
+            echo "FAIL: $1 (expected [$2], got [$3])"
+            fail=$((fail + 1))
+        fi
+    }
+    t "date DD-MM-YY" "22-Apr-2026" "$(normalize_date "22-04-26")"
+    t "date ISO" "22-Apr-2026" "$(normalize_date "2026-04-22")"
+    t "date DD-Mon-YYYY" "09-Sep-2026" "$(normalize_date "09-Sep-2026")"
+    t "date garbage" "" "$(normalize_date "hello" || true)"
+    t "seat nested online" "3" "$(seat_count '{"seat_counts":{"online":3,"offline":1}}')"
+    t "seat flat" "5" "$(seat_count '{"available_seats":5}')"
+    t "seat zero" "0" "$(seat_count '{"seat_counts":{"online":0}}')"
+    t "train name by content" "JAHANABAD EXPRESS (826)" "$(train_name '{"train_model":"826","trip_number":"JAHANABAD EXPRESS (826)"}')"
+    t "train id by content" "826" "$(train_id '{"train_model":"826","trip_number":"JAHANABAD EXPRESS (826)"}')"
+    t "class name" "S_CHAIR" "$(class_name '{"type":"S_CHAIR"}')"
+    STATIONS=(Dhaka Chattogram "Cox's Bazar" Biman_Bandar)
+    t "station exact" "Dhaka" "$(station_matches "dhaka")"
+    t "station compact spaces" "Cox's Bazar" "$(station_matches "cox bazar")"
+    WANTED_CLASSES=("S_CHAIR")
+    if matches_class '{"type":"S_CHAIR"}'; then echo "PASS: class match"; else echo "FAIL: class match"; fail=$((fail + 1)); fi
+    if matches_class '{"type":"AC_S"}'; then echo "FAIL: class mismatch leaked"; fail=$((fail + 1)); else echo "PASS: class mismatch rejected"; fi
+    # ask() on EOF must return 1 immediately (no hang)
+    local v="SENTINEL"
+    if ASK_NO_TTY=1 ask "q: " v < /dev/null; then
+        echo "FAIL: ask EOF should return 1"; fail=$((fail + 1))
+    else
+        echo "PASS: ask EOF returns 1"
+    fi
+    [[ -z "$v" ]] || { echo "FAIL: ask EOF should clear VAR"; fail=$((fail + 1)); }
+    # recommendations: shown + added on 'y'
+    local fake
+    fake="$(mktemp)"
+    printf '%s' '{"data":{"trains":[],"recommendations":[{"trip_number":"NIGHT STAR (99)","train_model":"99"}]}}' > "$fake"
+    WANTED_TRAINS=()
+    ASK_NO_TTY=1 offer_recommendations "$fake" <<< "y" > /dev/null
+    (( ${#WANTED_TRAINS[@]} == 1 )) && echo "PASS: recommendation added" || { echo "FAIL: recommendation not added"; fail=$((fail + 1)); }
+    rm -f "$fake"
+    # stations.txt ships with the repo and holds 100+ stations
+    local sfile
+    sfile="$(dirname "${BASH_SOURCE[0]:-$0}")/stations.txt"
+    if [[ -s "$sfile" ]] && (( $(wc -l < "$sfile") >= 100 )); then
+        echo "PASS: stations.txt ($(wc -l < "$sfile") stations)"
+    else
+        echo "FAIL: stations.txt missing/too small ($sfile)"; fail=$((fail + 1))
+    fi
+    if (( fail == 0 )); then echo "SELFTEST: all passed"; else echo "SELFTEST: $fail failure(s)"; fi
+    return $fail
 }
 
 # ============================================================
@@ -2590,7 +2538,7 @@ setup() {
 
     if (( ${#WANTED_TRAINS[@]} == 0 )); then
 
-        select_trains
+        select_trains || exit 1
 
     elif trains_selection_valid; then
 
@@ -2606,8 +2554,7 @@ setup() {
         echo -e "${D}Saved selection no longer matches live trains.${N}"
         echo
 
-        read -r -p \
-            "Change train selection? [y/N]: " answer < /dev/tty
+        ask "Change train selection? [y/N]: " answer || true
 
         case "$answer" in
             y|Y|yes|YES)
@@ -2627,7 +2574,7 @@ setup() {
 
         if (( ${#WANTED_CLASSES[@]} == 0 )); then
 
-            auto_use_seat_class || select_classes
+            auto_use_seat_class || select_classes || exit 1
 
         elif classes_selection_valid; then
 
@@ -2643,8 +2590,7 @@ setup() {
             echo -e "${D}Saved selection no longer matches live classes.${N}"
             echo
 
-            read -r -p \
-                "Change class selection? [y/N]: " answer < /dev/tty
+            ask "Change class selection? [y/N]: " answer || true
 
             case "$answer" in
                 y|Y|yes|YES)
@@ -2655,6 +2601,10 @@ setup() {
         fi
 
     fi
+
+    # Suggested alternate routes (if the API returned any) — ask
+    # BEFORE monitoring starts whether to watch them too.
+    offer_recommendations "$tmp" || true
 
     rm -f "$tmp"
 
@@ -2675,6 +2625,11 @@ if [[ "${1:-}" == "--dump" || "${1:-}" == "-d" ]]; then
     exit 0
 fi
 
+if [[ "${1:-}" == "--selftest" ]]; then
+    selftest
+    exit $?
+fi
+
 clear
 
 echo -e "${C}"
@@ -2690,7 +2645,7 @@ echo -e "${N}"
 
 ensure_deps || exit 1
 
-ensure_pager_tone 2>/dev/null || true
+ensure_pager_tone || true
 
 setup
 
@@ -2775,11 +2730,13 @@ while true; do
                 "\r\033[K${D}Next check in %2ds ${C}[press e to edit]${N}" \
                 "$remaining"
 
-            if read -r -t 1 -n 1 key < /dev/tty; then
+            if ask_key 1 key; then
                 if [[ "$key" == "e" || "$key" == "E" || "$key" == $'\x08' ]]; then
                     printf "\r\033[K"
                     edit_menu
                 fi
+            elif (( HAVE_TTY == 0 )); then
+                sleep 1
             fi
 
         done
@@ -2812,7 +2769,7 @@ while true; do
         echo -e "${R}Authentication stopped working.${N}"
         echo
 
-        read -r -p "Update Auth JSON? [y/N]: " answer < /dev/tty
+        ask "Update Auth JSON? [y/N]: " answer || true
 
         case "$answer" in
 
