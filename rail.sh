@@ -1,11 +1,12 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 
 # ============================================================
 # BANGLADESH RAILWAY SEAT MONITOR
-# TERMUX / ANDROID
+# TERMUX / ANDROID + generic Linux terminal
 # ============================================================
 
 set -u
+set +H 2>/dev/null || true
 
 CONFIG="$HOME/railway-monitor.json"
 
@@ -23,7 +24,7 @@ DEFAULT_INTERVAL=10
 # ============================================================
 
 PAGER_FILE="$HOME/pager.wav"
-PAGER_URL="PASTE_YOUR_GITHUB_RAW_WAV_URL_HERE"
+PAGER_URL="https://raw.githubusercontent.com/lutfor183/rail-reckon/main/pager.wav"
 
 # ============================================================
 # COLORS
@@ -48,6 +49,8 @@ TO=""
 DATE=""
 SEAT_CLASS=""
 INTERVAL="$DEFAULT_INTERVAL"
+MODE=""
+FREE_BASE="https://cybershbd.xyz/BdRail/index.php"
 
 declare -a WANTED_TRAINS=()
 declare -a WANTED_CLASSES=()
@@ -56,6 +59,49 @@ declare -a TRAIN_JSON=()
 declare -a CLASS_NAMES=()
 declare -a CURL_HEADERS=()
 
+is_termux() {
+    [[ -n "${PREFIX:-}" && "$PREFIX" == *"com.termux"* ]] || [[ -d "/data/data/com.termux" ]]
+}
+
+ensure_deps() {
+    local missing=()
+    local cmd
+    for cmd in curl jq; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+    if (( ${#missing[@]} == 0 )); then
+        return 0
+    fi
+    echo -e "${Y}Installing missing dependencies: ${missing[*]}${N}"
+    if is_termux; then
+        if command -v pkg >/dev/null 2>&1; then
+            pkg update -y >/dev/null 2>&1 || true
+            pkg install -y "${missing[@]}" termux-api >/dev/null 2>&1 || pkg install -y "${missing[@]}"
+        else
+            echo -e "${R}pkg not found.${N}"
+            return 1
+        fi
+    elif command -v apt-get >/dev/null 2>&1; then
+        if command -v sudo >/dev/null 2>&1 && [[ "$(id -u)" -ne 0 ]]; then
+            sudo apt-get update >/dev/null 2>&1 || true
+            sudo apt-get install -y "${missing[@]}" >/dev/null 2>&1 || return 1
+        else
+            apt-get update >/dev/null 2>&1 || true
+            apt-get install -y "${missing[@]}" >/dev/null 2>&1 || return 1
+        fi
+    else
+        echo -e "${R}Missing: ${missing[*]}. Please install them manually.${N}"
+        return 1
+    fi
+    for cmd in "${missing[@]}"; do
+        command -v "$cmd" >/dev/null 2>&1 || {
+            echo -e "${R}Could not install $cmd.${N}"
+            return 1
+        }
+    done
+    echo -e "${G}Deps ready.${N}"
+}
+
 # ============================================================
 # NORMALIZE
 # ============================================================
@@ -63,9 +109,396 @@ declare -a CURL_HEADERS=()
 norm() {
     printf '%s' "$1" |
         tr '[:upper:]' '[:lower:]' |
+        tr -d "'" |
         sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
+# ============================================================
+# STATIONS — canonical spelling list (case-insensitive match +
+# autocomplete). Type any substring; exact names match regardless
+# of case, so "dhaka", "DHAKA" and "Dhaka" all resolve to Dhaka.
+# ============================================================
+
+STATIONS=(
+    "Abdulpur"
+    "Ahsanganj"
+    "Akhaura"
+    "Akkelpur"
+    "Alamdanga"
+    "Amirabad"
+    "Arani"
+    "Ashuganj"
+    "Azampur"
+    "Azim Nagar"
+    "Badarganj"
+    "Bajitpur"
+    "Bajra"
+    "Bamondanga"
+    "Baramchal"
+    "Barhatta"
+    "Barkhata"
+    "Benapole"
+    "Bhairab_Bazar"
+    "Bhanga"
+    "Bhanga_Junction"
+    "Bhanugach"
+    "Bheramara"
+    "Bhuapur"
+    "Bidyaganj"
+    "Biman_Bandar"
+    "Birampur"
+    "Bogura"
+    "Bonar_Para"
+    "Boral_Bridge"
+    "Brahmanbaria"
+    "Burimari"
+    "Chakaria"
+    "Chandpur"
+    "Chandpur_Court"
+    "Chapainawabganj"
+    "Chatmohar"
+    "Chattogram"
+    "Chilahati"
+    "Chirirbandar"
+    "Choumuhani"
+    "Chuadanga"
+    "Cox's Bazar"
+    "Cumilla"
+    "Darshana_Halt"
+    "Daulatpur"
+    "Dewanganj_Bazar"
+    "Dhaka"
+    "Dinajpur"
+    "Dohazari"
+    "Domar"
+    "Dulahazara"
+    "Faridpur"
+    "Feni"
+    "Fulbari"
+    "Gachihata"
+    "Gafargaon"
+    "Gaibandha"
+    "GOMDANDI"
+    "Gouripur_Myn"
+    "Gunabati"
+    "Hajiganj"
+    "Harashpur"
+    "HARBANG"
+    "Hasanpur"
+    "Hatibandha"
+    "Ibrahimabad"
+    "Ishwardi"
+    "Ishwardi Bypass"
+    "ISLAMABAD"
+    "Islampur_Bazar"
+    "Jamalpur_Town"
+    "Jamtail"
+    "Janali_Hat"
+    "Jashore"
+    "Jhikargacha"
+    "Joydebpur"
+    "Joypurhat"
+    "Kalukhali"
+    "Kankina"
+    "Kaoraid"
+    "Kashiani"
+    "Kaunia"
+    "Kendua_Bazar"
+    "Khoksha"
+    "Khulna"
+    "Kishorganj"
+    "Kismat"
+    "Kotchandpur"
+    "Kulaura"
+    "Kuliarchar"
+    "Kumarkhali"
+    "Kumira"
+    "Kurigram"
+    "Kushtia_Court"
+    "Laksam"
+    "Lalmonirhat"
+    "LOHAGARA"
+    "Lohagora"
+    "Madhnagar"
+    "Mahimaganj"
+    "Maijdi Court"
+    "Maijgaon"
+    "Manikkhali"
+    "Mawa"
+    "Meher"
+    "Melandah_Bazar"
+    "Methikanda"
+    "Mirpur"
+    "Mirzapur"
+    "Mohanganj"
+    "Montola"
+    "Mubarakganj"
+    "Muksudpur"
+    "Mukundapur"
+    "Muladhuli"
+    "Mymensingh"
+    "Nandina"
+    "Nangolkot"
+    "Narail"
+    "Narsingdi"
+    "Narundi"
+    "Natherpetua"
+    "Natore"
+    "Nayapara"
+    "Netrakona"
+    "Nilphamari"
+    "Noakhali"
+    "Noapara"
+    "Pachuria"
+    "Padma"
+    "Paksey"
+    "Panchagarh"
+    "Panchbibi"
+    "Pangsha"
+    "Parbatipur"
+    "Patgram"
+    "Patiya"
+    "Pirgacha"
+    "Pirganj"
+    "Piyarpur"
+    "Poradaha"
+    "Pukuria"
+    "Quasba"
+    "Rajbari"
+    "Rajshahi"
+    "Ramu"
+    "Rangpur"
+    "Ruhia"
+    "Safdarpur"
+    "Saidpur"
+    "Santahar"
+    "Sararchar"
+    "Sardah_Road"
+    "Sarishabari"
+    "Satkania"
+    "Setabganj"
+    "SH M Monsur Ali"
+    "Shahaji_Bazar"
+    "Shaistaganj"
+    "Shamshernagar"
+    "Shashidal"
+    "Shibchar"
+    "Sholoshohor"
+    "Shyamgonj"
+    "Singia"
+    "Sirajganj_Bazar"
+    "Sirajganjraipur"
+    "Sonaimuri"
+    "Sonatola"
+    "Sreemangal"
+    "Sreenagar"
+    "Sreepur"
+    "Sylhet"
+    "Talma"
+    "Talora"
+    "Tangail"
+    "Tarakandi"
+    "Teesta_Junction"
+    "Thakrokona"
+    "Thakurgaon_Road"
+    "Tushbhandar"
+    "Ullapara"
+)
+
+# Read one line: from /dev/tty when available, else stdin.
+tty_read() {
+    local prompt="$1" var="$2"
+    local _l=""
+    # /dev/tty may exist but refuse to open (no controlling terminal,
+    # e.g. piped CLI) — silence that and fall back to stdin.
+    if [[ -r /dev/tty ]] && { IFS= read -r -p "$prompt" _l < /dev/tty; } 2>/dev/null; then
+        printf -v "$var" '%s' "$_l"
+        return 0
+    fi
+    if IFS= read -r -p "$prompt" _l; then
+        printf -v "$var" '%s' "$_l"
+        return 0
+    fi
+    printf -v "$var" '%s' "$_l"
+    return 1
+}
+
+# Compact form: lowercase, no spaces/underscores/hyphens/apostrophes.
+# Catches "cox bazar", "Cox-Bazar", "bimanbandar" style typos.
+norm_compact() {
+    norm "$1" | tr -d ' _-'
+}
+
+# Canonical spelling for an exact (case-insensitive) station name.
+station_canonical() {
+    local want s
+    want="$(norm "$1")"
+    [[ -z "$want" ]] && return 1
+    for s in "${STATIONS[@]}"; do
+        if [[ "$(norm "$s")" == "$want" ]]; then
+            printf '%s' "$s"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# All stations containing the query (case-insensitive), one per line.
+station_matches() {
+    local ql s
+    ql="$(norm "$1")"
+    [[ -z "$ql" ]] && return 1
+    for s in "${STATIONS[@]}"; do
+        [[ "$(norm "$s")" == *"$ql"* ]] && printf '%s\n' "$s"
+    done
+}
+
+# Exact match on compact form ("cox bazar" -> Cox's Bazar).
+station_compact_exact() {
+    local want s
+    want="$(norm_compact "$1")"
+    [[ -z "$want" ]] && return 1
+    for s in "${STATIONS[@]}"; do
+        if [[ "$(norm_compact "$s")" == "$want" ]]; then
+            printf '%s' "$s"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Substring match on compact form, one per line.
+station_compact_matches() {
+    local ql s sc
+    ql="$(norm_compact "$1")"
+    [[ -z "$ql" ]] && return 1
+    for s in "${STATIONS[@]}"; do
+        sc="$(norm_compact "$s")"
+        [[ "$sc" == *"$ql"* ]] && printf '%s\n' "$s"
+    done
+}
+
+# Typo tolerance: top-3 closest names by edit distance (awk).
+# Prints names to stdout, "did you mean" menu to stderr.
+station_fuzzy_offer() {
+    command -v awk >/dev/null 2>&1 || return 1
+    command -v sort >/dev/null 2>&1 || return 1
+    local qc s out
+    qc="$(norm_compact "$1")"
+    (( ${#qc} >= 3 )) || return 1
+    out="$(
+        for s in "${STATIONS[@]}"; do
+            printf '%s\t%s\n' "$(norm_compact "$s")" "$s"
+        done | awk -F'\t' -v q="$qc" '
+            function lev(a,b, la,lb,i,j,cost,best,pu,cu) {
+                la=length(a); lb=length(b)
+                if (la==0) return lb
+                if (lb==0) return la
+                for (j=0;j<=lb;j++) pu[j]=j
+                for (i=1;i<=la;i++) {
+                    cu[0]=i
+                    for (j=1;j<=lb;j++) {
+                        cost=(substr(a,i,1)==substr(b,j,1))?0:1
+                        best=pu[j]+1
+                        if (cu[j-1]+1<best) best=cu[j-1]+1
+                        if (pu[j-1]+cost<best) best=pu[j-1]+cost
+                        cu[j]=best
+                    }
+                    for (j=0;j<=lb;j++) pu[j]=cu[j]
+                }
+                return pu[lb]
+            }
+            { d=lev($1,q); lim=(length(q)<5)?1:2; if (d<=lim && d>0) print d "\t" $2 }
+        ' | sort -n | head -3 | cut -f2-
+    )"
+    [[ -z "$out" ]] && return 1
+    echo -e "${Y}Did you mean (typo?) — pick a number:${N}" >&2
+    local i=1
+    while IFS= read -r s; do
+        [[ -n "$s" ]] && { echo -e "  ${C}$i)${N} $s" >&2; printf '%s\n' "$s"; i=$((i+1)); }
+    done <<< "$out"
+    return 0
+}
+
+# Interactive station picker: type any part of the name, pick a
+# number when several match. Always returns canonical spelling.
+pick_station() {
+    local prompt="$1" current="$2"
+    local q="" canon i max n
+    local -a matches=()
+    local first=1
+    while true; do
+        if (( first == 1 )); then
+            first=0
+            if [[ -n "$current" ]]; then
+                tty_read "$prompt [keep: $current]: " q || return 1
+                [[ -z "$q" ]] && { printf '%s' "$current"; return 0; }
+            else
+                tty_read "$prompt: " q || return 1
+            fi
+        else
+            tty_read "Type more letters or pick a number: " q || return 1
+        fi
+        if [[ -z "$q" && -n "$current" ]]; then
+            printf '%s' "$current"
+            return 0
+        fi
+        if [[ "$q" =~ ^[0-9]+$ ]] && (( ${#matches[@]} > 0 )) && (( q >= 1 && q <= max )); then
+            printf '%s' "${matches[$((q-1))]}"
+            return 0
+        fi
+        if [[ -z "$q" ]]; then
+            echo -e "${R}Type part of a station name.${N}" >&2
+            continue
+        fi
+        if canon="$(station_canonical "$q")"; then
+            printf '%s' "$canon"
+            return 0
+        fi
+        if canon="$(station_compact_exact "$q")"; then
+            printf '%s' "$canon"
+            return 0
+        fi
+        matches=()
+        while IFS= read -r s; do
+            [[ -n "$s" ]] && matches+=("$s")
+        done < <(station_matches "$q")
+        if (( ${#matches[@]} == 0 )); then
+            while IFS= read -r s; do
+                [[ -n "$s" ]] && matches+=("$s")
+            done < <(station_compact_matches "$q")
+        fi
+        n="${#matches[@]}"
+        if (( n == 0 )); then
+            local fz
+            if fz="$(station_fuzzy_offer "$q")"; then
+                matches=()
+                while IFS= read -r s; do
+                    [[ -n "$s" ]] && matches+=("$s")
+                done <<< "$fz"
+                max="${#matches[@]}"
+            else
+                echo -e "${R}No station matches '$q'. Check spelling and try again.${N}" >&2
+            fi
+            continue
+        fi
+        if (( n == 1 )); then
+            printf '%s' "${matches[0]}"
+            return 0
+        fi
+        if (( n > 20 )); then
+            echo -e "${Y}${n} stations match '$q' — too many, type more letters.${N}" >&2
+            matches=()
+            continue
+        fi
+        max=$(( n < 10 ? n : 10 ))
+        echo -e "${Y}${n} stations match — pick a number:${N}" >&2
+        for ((i=0; i<max; i++)); do
+            echo -e "  ${C}$((i+1)))${N} ${matches[i]}" >&2
+        done
+        (( n > max )) && echo -e "${D}...showing $max of $n — type more letters to narrow.${N}" >&2
+    done
+}
 # ============================================================
 # DATE NORMALIZE
 #
@@ -316,6 +749,7 @@ seat_count() {
                 .seat_counts.online //
                 .seat_counts.available //
                 .online //
+                .count //
                 (
                     if (.seat_counts | type) == "object"
                     then ([.seat_counts[] | numbers] | add)
@@ -326,13 +760,15 @@ seat_count() {
             )
             | tonumber?
             // 0
+            | floor
 
         elif type == "number" then
-            .
+            floor
 
         elif type == "string" then
             tonumber?
             // 0
+            | floor
 
         else
             0
@@ -346,17 +782,57 @@ seat_count() {
 # ============================================================
 
 ensure_pager_tone() {
-
     [[ -s "$PAGER_FILE" ]] && return 0
-
-    [[ -z "$PAGER_URL" || "$PAGER_URL" == "PASTE_YOUR_GITHUB_RAW_WAV_URL_HERE" ]] &&
+    [[ -z "${PAGER_URL:-}" ]] && return 1
+    if command -v curl >/dev/null 2>&1; then
+        curl --silent --location --fail --connect-timeout 10 --max-time 60 "$PAGER_URL" -o "$PAGER_FILE.tmp" 2>/dev/null && [[ -s "$PAGER_FILE.tmp" ]] && mv "$PAGER_FILE.tmp" "$PAGER_FILE" || rm -f "$PAGER_FILE.tmp"
+    elif command -v wget >/dev/null 2>&1; then
+        wget --quiet --timeout=60 -O "$PAGER_FILE.tmp" "$PAGER_URL" 2>/dev/null && [[ -s "$PAGER_FILE.tmp" ]] && mv "$PAGER_FILE.tmp" "$PAGER_FILE" || rm -f "$PAGER_FILE.tmp"
+    else
         return 1
+    fi
+    if [[ -s "$PAGER_FILE" ]]; then
+        if command -v file >/dev/null 2>&1; then
+            file "$PAGER_FILE" 2>/dev/null | grep -qi 'wave\|riff' || { echo -e "${Y}Downloaded tone invalid - ignoring.${N}"; rm -f "$PAGER_FILE"; return 1; }
+        fi
+        echo -e "${G}Alert tone downloaded.${N}"
+        return 0
+    fi
+    return 1
+}
 
-    command -v curl >/dev/null 2>&1 || return 1
+play_tone_once() {
+    [[ -s "$PAGER_FILE" ]] || return 1
+    if command -v termux-media-player >/dev/null 2>&1; then
+        termux-media-player play "$PAGER_FILE" >/dev/null 2>&1 &
+        echo $!
+        return 0
+    elif command -v mpv >/dev/null 2>&1; then
+        mpv --no-video --really-quiet "$PAGER_FILE" >/dev/null 2>&1 &
+        echo $!
+        return 0
+    elif command -v ffplay >/dev/null 2>&1; then
+        ffplay -nodisp -autoexit -loglevel quiet "$PAGER_FILE" >/dev/null 2>&1 &
+        echo $!
+        return 0
+    elif command -v paplay >/dev/null 2>&1; then
+        paplay "$PAGER_FILE" >/dev/null 2>&1 &
+        echo $!
+        return 0
+    elif command -v aplay >/dev/null 2>&1; then
+        aplay -q "$PAGER_FILE" >/dev/null 2>&1 &
+        echo $!
+        return 0
+    fi
+    return 1
+}
 
-    curl --silent --location --fail "$PAGER_URL" -o "$PAGER_FILE" 2>/dev/null
-
-    [[ -s "$PAGER_FILE" ]]
+stop_tone_pid() {
+    local pid="${1:-}"
+    [[ -n "$pid" ]] && kill "$pid" >/dev/null 2>&1 || true
+    if command -v termux-media-player >/dev/null 2>&1; then
+        termux-media-player stop >/dev/null 2>&1 || true
+    fi
 }
 
 # ============================================================
@@ -396,11 +872,15 @@ ring_alarm() {
     ensure_pager_tone && have_tone=1
 
     local rounds=3
-    local total_seconds=30
-    local step=2
+    local total_seconds=15
+    local step=1
+    local replay_every=2
     local stopped=0
     local key=""
     local notif_id=99110
+    local tone_pid=""
+    local elapsed=0
+    local since_replay=99
 
     echo -e "${Y}Press any key to stop. Press 'e' to stop AND edit search.${N}"
 
@@ -414,42 +894,27 @@ ring_alarm() {
 
         (( stopped == 1 )) && break
 
-        echo -e "${R}📞 RINGING (${r}/${rounds})...${N}"
+        echo -e "${R}RINGING (${r}/${rounds}, ${total_seconds}s)...${N}"
 
-        local elapsed=0
+        if command -v termux-notification >/dev/null 2>&1; then
+            termux-notification --id "$notif_id" --title "Seat Available - BOOK NOW" --content "$FROM to $TO - tap to open Termux" --priority max --sound --vibrate 0,700,300,700 >/dev/null 2>&1 || true
+        elif command -v notify-send >/dev/null 2>&1; then
+            notify-send "Seat Available - BOOK NOW" "$FROM to $TO" >/dev/null 2>&1 || true
+        fi
+
+        elapsed=0
+        since_replay=99
 
         while (( elapsed < total_seconds )); do
 
-            # Custom tone, fired as a short non-blocking burst so
-            # it never becomes a long-running thing we have to
-            # wait out — "stop" below kills it instantly.
-            if (( have_tone == 1 )) && command -v termux-media-player >/dev/null 2>&1; then
-                termux-media-player play "$PAGER_FILE" >/dev/null 2>&1 &
+            if (( have_tone == 1 )) && (( since_replay >= replay_every )); then
+                stop_tone_pid "$tone_pid" 2>/dev/null || true
+                tone_pid="$(play_tone_once 2>/dev/null || true)"
+                since_replay=0
             fi
 
-            if command -v termux-notification >/dev/null 2>&1; then
-
-                termux-notification \
-                    --id "$notif_id" \
-                    --title "🚨 Seat Available — BOOK NOW" \
-                    --content "$FROM → $TO — tap to open Termux" \
-                    --priority max \
-                    --sound \
-                    --vibrate 0,700,300,700 \
-                    >/dev/null 2>&1
-
-            fi
-
-            # Fire vibration directly too, independent of the
-            # notification. Android notification channels can
-            # silently mute a channel's sound/vibration after
-            # the first post (a per-channel setting the API
-            # can't override on repeat calls) — termux-vibrate
-            # hits the vibration motor directly, so you still
-            # feel an alert even if the notification channel
-            # has gone quiet.
             if command -v termux-vibrate >/dev/null 2>&1; then
-                termux-vibrate -d 700 -f >/dev/null 2>&1
+                termux-vibrate -d 700 -f >/dev/null 2>&1 || true
             fi
 
             if ! command -v termux-notification >/dev/null 2>&1 &&
@@ -457,24 +922,29 @@ ring_alarm() {
                 printf '\a'
             fi
 
-            if read -r -t "$step" -n 1 key < /dev/tty; then
-                stopped=1
-                break
+            if [[ -r /dev/tty ]]; then
+                if read -r -t "$step" -n 1 key < /dev/tty; then
+                    stopped=1
+                    break
+                fi
+            else
+                sleep "$step"
             fi
 
             elapsed=$((elapsed + step))
+            since_replay=$((since_replay + step))
 
         done
 
-        command -v termux-notification-remove >/dev/null 2>&1 &&
-            termux-notification-remove "$notif_id" >/dev/null 2>&1
-
-        (( have_tone == 1 )) && command -v termux-media-player >/dev/null 2>&1 &&
-            termux-media-player stop >/dev/null 2>&1
+        stop_tone_pid "$tone_pid" 2>/dev/null || true
+        tone_pid=""
+        if command -v termux-notification-remove >/dev/null 2>&1; then
+            termux-notification-remove "$notif_id" >/dev/null 2>&1 || true
+        fi
 
         (( stopped == 1 )) && break
 
-        (( r < rounds )) && sleep 10
+        (( r < rounds )) && sleep 5
 
     done
 
@@ -491,8 +961,12 @@ ring_alarm() {
 
     echo -e "${C}Press 'e' within 10s to edit search now, or wait to keep monitoring...${N}"
 
-    if read -r -t 10 -n 1 key < /dev/tty; then
-        [[ "$key" == "e" || "$key" == "E" ]] && edit_menu
+    if [[ -r /dev/tty ]]; then
+        if read -r -t 10 -n 1 key < /dev/tty; then
+            [[ "$key" == "e" || "$key" == "E" ]] && edit_menu || true
+        fi
+    else
+        sleep 2 || true
     fi
 }
 
@@ -531,11 +1005,15 @@ set_url_param() {
 
     local pattern="[?&]${key}="
     if [[ "$url" =~ $pattern ]]; then
-        URL="$(printf '%s' "$url" | sed -E "s/([?&]${key}=)[^&]*/\1${encoded}/")"
+        esc="$(printf '%s' "$encoded" | sed -e 's/[\\&|]/\\&/g')"
+        URL="$(printf '%s' "$url" | sed -E "s|([?&]${key}=)[^&]*|\1${esc}|")"
     elif [[ "$url" == *"?"* ]]; then
         URL="${url}&${key}=${encoded}"
     else
         URL="${url}?${key}=${encoded}"
+    fi
+    if [[ "${MODE:-}" == "free" ]]; then
+        build_free_url
     fi
 }
 
@@ -568,14 +1046,14 @@ confirm_search_params() {
                 set_url_param "date_of_journey" "$DATE"
             fi
 
-            read -r -p "New from_city [keep: $FROM]: " v < /dev/tty
-            if [[ -n "$v" ]]; then
+            v="$(pick_station "New from_city" "$FROM")"
+            if [[ -n "$v" && "$v" != "$FROM" ]]; then
                 FROM="$v"
                 set_url_param "from_city" "$FROM"
             fi
 
-            read -r -p "New to_city [keep: $TO]: " v < /dev/tty
-            if [[ -n "$v" ]]; then
+            v="$(pick_station "New to_city" "$TO")"
+            if [[ -n "$v" && "$v" != "$TO" ]]; then
                 TO="$v"
                 set_url_param "to_city" "$TO"
             fi
@@ -607,6 +1085,7 @@ get_trains() {
         (
             .data.data.trains //
             .data.trains //
+            .trains //
             []
         )[]
     ' "$1" 2>/dev/null
@@ -666,13 +1145,21 @@ save_config() {
     (( INTERVAL < MIN_INTERVAL )) &&
         INTERVAL="$MIN_INTERVAL"
 
+    # In free mode the proxy URL is derived from the route, so keep
+    # the stored direct-API url untouched for later JSON use.
+    local url_to_save="$URL"
+    if [[ "$MODE" == "free" ]] && [[ -f "$CONFIG" ]]; then
+        url_to_save="$(jq -r '.url // empty' "$CONFIG")"
+    fi
+
     tmp="${CONFIG}.tmp"
 
     if [[ -f "$CONFIG" ]] &&
        jq empty "$CONFIG" >/dev/null 2>&1; then
 
         jq \
-            --arg url "$URL" \
+            --arg url "$url_to_save" \
+            --arg mode "$MODE" \
             --arg from "$FROM" \
             --arg to "$TO" \
             --arg date "$DATE" \
@@ -682,6 +1169,7 @@ save_config() {
             --argjson interval "$INTERVAL" \
             '
             .url = $url
+            | .mode = $mode
             | .from_city = $from
             | .to_city = $to
             | .date_of_journey = $date
@@ -694,7 +1182,8 @@ save_config() {
     else
 
         jq -n \
-            --arg url "$URL" \
+            --arg url "$url_to_save" \
+            --arg mode "$MODE" \
             --arg from "$FROM" \
             --arg to "$TO" \
             --arg date "$DATE" \
@@ -704,6 +1193,7 @@ save_config() {
             --argjson interval "$INTERVAL" \
             '{
                 url: $url,
+                mode: $mode,
                 from_city: $from,
                 to_city: $to,
                 date_of_journey: $date,
@@ -737,10 +1227,11 @@ load_config() {
         return 1
 
     URL="$(jq -r '.url // empty' "$CONFIG")"
-    FROM="$(jq -r '.from_city // empty' "$CONFIG")"
-    TO="$(jq -r '.to_city // empty' "$CONFIG")"
-    DATE="$(jq -r '.date_of_journey // empty' "$CONFIG")"
-    SEAT_CLASS="$(jq -r '.seat_class // "ALL"' "$CONFIG")"
+    MODE="$(jq -r '.mode // "json"' "$CONFIG")"
+    FROM="$(jq -r '.from_city // .from // empty' "$CONFIG")"
+    TO="$(jq -r '.to_city // .to // empty' "$CONFIG")"
+    DATE="$(jq -r '.date_of_journey // .date // empty' "$CONFIG")"
+    SEAT_CLASS="$(jq -r '.seat_class // .seatClass // "ALL"' "$CONFIG")"
 
     INTERVAL="$(jq -r '.interval // 10' "$CONFIG")"
 
@@ -767,7 +1258,12 @@ load_config() {
         jq -r '.classes[]? // empty' "$CONFIG"
     )
 
-    [[ -n "$URL" ]] || return 1
+    if [[ "$MODE" == "free" ]]; then
+        [[ -n "$FROM" && -n "$TO" && -n "$DATE" ]] || return 1
+        build_free_url
+    else
+        [[ -n "$URL" ]] || return 1
+    fi
 
     return 0
 }
@@ -781,42 +1277,91 @@ prompt_auth_json() {
     echo
     echo -e "${Y}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
     echo -e "${W}Paste fresh Railway JSON${N}"
-    echo -e "${D}Tampermonkey → Export for Termux${N}"
+    echo -e "${D}Tampermonkey -> Export for Termux${N}"
     echo
-    echo -e "${D}Paste complete JSON, then type END (or end)${N}"
+    echo -e "${D}Paste complete JSON, then type END + Enter (or Ctrl+D)${N}"
     echo -e "${Y}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
     echo
 
-    local tmp
+    local tmp jq_err line
     tmp="$(mktemp)"
 
-    while IFS= read -r line; do
-        [[ "$(norm "$line")" == "end" ]] && break
-        printf '%s\n' "$line" >> "$tmp"
-    done
+    strip_paste_line() {
+        printf '%s' "$1" | sed -e 's/\x1b\[200~//g' -e 's/\x1b\[201~//g' | tr -d '\r'
+    }
+
+    if [[ -r /dev/tty ]]; then
+        while IFS= read -r line < /dev/tty || [[ -n "${line:-}" ]]; do
+            line="$(strip_paste_line "$line")"
+            [[ "$(norm "$line")" == "end" ]] && break
+            [[ "$line" == '```'* ]] && continue
+            [[ "$(norm "$line")" == "." ]] && break
+            printf '%s\n' "$line" >> "$tmp"
+            if [[ -z "$line" ]] && [[ -s "$tmp" ]] && jq -e '.url and .headers' "$tmp" >/dev/null 2>&1; then
+                break
+            fi
+        done
+    else
+        while IFS= read -r line || [[ -n "${line:-}" ]]; do
+            line="$(strip_paste_line "$line")"
+            [[ "$(norm "$line")" == "end" ]] && break
+            [[ "$line" == '```'* ]] && continue
+            printf '%s\n' "$line" >> "$tmp"
+        done
+    fi
 
     if [[ ! -s "$tmp" ]]; then
         rm -f "$tmp"
-        echo -e "${R}Nothing pasted.${N}"
+        echo -e "${R}Nothing pasted. Tip: long-press -> PASTE, then type END.${N}"
         return 1
     fi
 
-    if ! jq empty "$tmp" >/dev/null 2>&1; then
+    if ! jq_err="$(jq empty "$tmp" 2>&1)"; then
+        echo -e "${R}That paste is not valid JSON.${N}"
+        echo -e "${D}$(printf '%s' "$jq_err" | head -n 2)${N}"
+        echo -e "${D}Tip: copy again via Tampermonkey Copy for Termux, paste once, then END.${N}"
         rm -f "$tmp"
-        echo -e "${R}Invalid JSON.${N}"
         return 1
     fi
 
     if ! jq -e '.headers | type == "object"' "$tmp" >/dev/null 2>&1; then
         rm -f "$tmp"
-        echo -e "${R}JSON has no valid headers object.${N}"
+        echo -e "${R}JSON has no valid headers object (export the full Copy-for-Termux JSON).${N}"
         return 1
     fi
 
-    # Preserve current selections and interval.
+    if ! jq -e '.url | type == "string"' "$tmp" >/dev/null 2>&1; then
+        rm -f "$tmp"
+        echo -e "${R}JSON has no url field. Re-export after doing a search.${N}"
+        return 1
+    fi
+
+    # NOTE: never use `//= (... // empty)` here — when BOTH key
+    # variants are absent, `empty` drops the ENTIRE document (jq exits
+    # 0 with no output), which used to wipe the paste and break the
+    # merge below with "invalid JSON text passed to --argjson".
+    local normalized
+    normalized="$(mktemp)"
+    jq '
+        .from_city //= .from
+        | .to_city //= .to
+        | .date_of_journey //= .date
+        | .seat_class //= .seatClass
+        | .seat_class //= "ALL"
+    ' "$tmp" > "$normalized" && mv "$normalized" "$tmp" || rm -f "$normalized"
+
+    # The normalize step must never empty the paste — re-verify.
+    if ! jq -e '.url | type == "string"' "$tmp" >/dev/null 2>&1; then
+        rm -f "$tmp" "$normalized"
+        echo -e "${R}Paste lost its url during processing. Re-export and try again.${N}"
+        return 1
+    fi
+
     local old_trains='[]'
     local old_classes='[]'
     local old_interval="$INTERVAL"
+    local new_trains='[]'
+    local new_classes='[]'
 
     if [[ -f "$CONFIG" ]] &&
        jq empty "$CONFIG" >/dev/null 2>&1; then
@@ -825,6 +1370,29 @@ prompt_auth_json() {
         old_classes="$(jq -c '.classes // []' "$CONFIG")"
         old_interval="$(jq -r '.interval // 10' "$CONFIG")"
     fi
+
+    new_trains="$(jq -c '.trains // []' "$tmp")"
+    new_classes="$(jq -c '.classes // []' "$tmp")"
+
+    # Adopt pasted selections only when saved ones are empty AND the
+    # pasted value is a real non-empty JSON array (never blank out).
+    if [[ "$old_trains" == "[]" || "$old_trains" == "null" || -z "$old_trains" ]]; then
+        if [[ -n "$new_trains" ]] && printf '%s' "$new_trains" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+            old_trains="$new_trains"
+        else
+            old_trains='[]'
+        fi
+    fi
+    if [[ "$old_classes" == "[]" || "$old_classes" == "null" || -z "$old_classes" ]]; then
+        if [[ -n "$new_classes" ]] && printf '%s' "$new_classes" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+            old_classes="$new_classes"
+        else
+            old_classes='[]'
+        fi
+    fi
+    # Final guard: merge args must be valid JSON, or --argjson fails.
+    printf '%s' "$old_trains" | jq empty >/dev/null 2>&1 || old_trains='[]'
+    printf '%s' "$old_classes" | jq empty >/dev/null 2>&1 || old_classes='[]'
 
     [[ "$old_interval" =~ ^[0-9]+$ ]] ||
         old_interval="$DEFAULT_INTERVAL"
@@ -867,6 +1435,7 @@ prompt_auth_json() {
 
     return 0
 }
+
 
 # ============================================================
 # STARTUP AUTH QUESTION
@@ -974,21 +1543,42 @@ api_request() {
 
     local output="$1"
 
+    # Login-free mode: public proxy, no auth headers at all.
+    if [[ "${MODE:-json}" == "free" ]]; then
+        local code
+        code="$(curl \
+            --silent \
+            --compressed \
+            --connect-timeout 10 \
+            --max-time 25 \
+            -H "Accept: application/json" \
+            -H "User-Agent: Mozilla/5.0" \
+            "$URL" \
+            -o "$output" \
+            -w '%{http_code}' 2>/dev/null)" || code="000"
+        [[ -n "$code" ]] || code="000"
+        printf '%s' "$code"
+        return 0
+    fi
+
     if ! build_curl_headers; then
         echo -e "${R}No API headers found.${N}"
         return 99
     fi
 
-    curl \
+    local code
+    code="$(curl \
         --silent \
-        --show-error \
         --compressed \
         --connect-timeout 10 \
         --max-time 25 \
         "${CURL_HEADERS[@]}" \
+        -H "Accept: application/json" \
         "$URL" \
         -o "$output" \
-        -w '%{http_code}'
+        -w '%{http_code}' 2>/dev/null)" || code="000"
+    [[ -n "$code" ]] || code="000"
+    printf '%s' "$code"
 }
 
 # ============================================================
@@ -1186,6 +1776,7 @@ edit_menu() {
     echo "  6) Classes selection"
     echo "  7) Interval         (currently: ${INTERVAL}s)"
     echo "  8) Paste new Auth JSON"
+    echo "  9) Switch method     (currently: ${MODE:-json})"
     echo "  0) Back to monitoring"
     echo
     read -r -p "Choice: " choice < /dev/tty
@@ -1195,9 +1786,9 @@ edit_menu() {
     case "$choice" in
         1) v="$(ask_date "New date (any format, e.g. 22-04-26, 2026-04-22, 22-Apr-2026): " "")"
            if [[ -n "$v" ]]; then DATE="$v"; set_url_param "date_of_journey" "$DATE"; save_config; echo -e "${G}✓ Date updated: $DATE${N}"; else echo -e "${Y}No change.${N}"; fi ;;
-        2) read -r -p "New from_city: " v < /dev/tty
+        2) v="$(pick_station "New from_city" "$FROM")"
            [[ -n "$v" ]] && { FROM="$v"; set_url_param "from_city" "$FROM"; save_config; echo -e "${G}✓ Updated.${N}"; } ;;
-        3) read -r -p "New to_city: " v < /dev/tty
+        3) v="$(pick_station "New to_city" "$TO")"
            [[ -n "$v" ]] && { TO="$v"; set_url_param "to_city" "$TO"; save_config; echo -e "${G}✓ Updated.${N}"; } ;;
         4) read -r -p "New seat_class (e.g. S_CHAIR, SNIGDHA, AC_S, ALL): " v < /dev/tty
            [[ -n "$v" ]] && { SEAT_CLASS="$v"; set_url_param "seat_class" "$SEAT_CLASS"; save_config; echo -e "${G}✓ Updated.${N}"; } ;;
@@ -1209,6 +1800,21 @@ edit_menu() {
            rm -f "$tmp" ;;
         7) configure_interval ;;
         8) prompt_auth_json ;;
+        9) choose_mode
+           if [[ "$MODE" == "free" ]]; then
+               build_free_url
+               save_config
+               echo -e "${G}✓ Switched to login-free. Next check uses the proxy.${N}"
+           else
+               save_config
+               echo -e "${G}✓ Switched to JSON method.${N}"
+               if ! has_json_headers; then
+                   echo -e "${Y}No Auth JSON saved — paste it now.${N}"
+                   prompt_auth_json || true
+                   load_config || true
+                   MODE="json"
+               fi
+           fi ;;
         0|"") ;;
         *) echo -e "${R}Invalid choice.${N}" ;;
     esac
@@ -1568,6 +2174,9 @@ check_response() {
     fi
 
     local found=0
+    local total_trains=0
+    local matched_trains=0
+    local matched_classes=0
 
     local train
     local st
@@ -1582,7 +2191,11 @@ check_response() {
 
         [[ -z "$train" ]] && continue
 
+        total_trains=$((total_trains + 1))
+
         matches_train "$train" || continue
+
+        matched_trains=$((matched_trains + 1))
 
         train_display="$(train_name "$train")"
         train_number="$(train_id "$train")"
@@ -1599,6 +2212,8 @@ check_response() {
 
             matches_class "$st" || continue
 
+            matched_classes=$((matched_classes + 1))
+
             cname="$(class_name "$st")"
             available="$(seat_count "$st")"
 
@@ -1610,8 +2225,11 @@ check_response() {
             # Bash compares integer seat counts directly.
             # =================================================
 
+            if [[ "$available" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                available="${available%%.*}"
+            fi
             if [[ "$available" =~ ^[0-9]+$ ]] &&
-               (( available > 0 )); then
+               (( 10#$available > 0 )); then
 
                 found=1
 
@@ -1655,10 +2273,206 @@ check_response() {
     )
 
     if (( found == 0 )); then
-        echo -e "${G}✓ Checked — no seats available${N}"
+        if (( total_trains == 0 )); then
+            echo -e "${Y}Checked — API returned no trains. Check From/To/Date (or run --dump).${N}"
+        elif (( matched_trains == 0 )); then
+            echo -e "${Y}Checked — $total_trains train(s) returned, none match your selection.${N}"
+            echo -e "${D}Tip: press e → 5 to reselect trains.${N}"
+        elif (( matched_classes == 0 )); then
+            echo -e "${Y}Checked — trains matched but none of your classes were found.${N}"
+            echo -e "${D}Tip: press e → 6 to reselect classes.${N}"
+        else
+            echo -e "${G}✓ Checked — no seats available${N}"
+        fi
     fi
 
     return 0
+}
+
+# ============================================================
+# METHOD (login-free vs JSON)
+# ============================================================
+
+# Build the public-proxy URL from the route (no login needed).
+build_free_url() {
+    local f tc d
+    f="$(printf '%s' "$FROM" | jq -sRr @uri)"
+    tc="$(printf '%s' "$TO" | jq -sRr @uri)"
+    d="$(printf '%s' "$DATE" | jq -sRr @uri)"
+    URL="${FREE_BASE}?action=search_trips&from_city=${f}&to_city=${tc}&date_of_journey=${d}"
+}
+
+# First question at startup: which fetch method to use.
+choose_mode() {
+    echo
+    echo -e "${W}How should train data be fetched?${N}"
+    echo -e "  ${C}1)${N} Login-free (public proxy, no paste needed)"
+    echo -e "  ${C}2)${N} JSON method (direct Railway API, needs Tampermonkey paste)"
+    local def="1"
+    [[ "$MODE" == "json" ]] && def="2"
+    [[ "$MODE" == "free" ]] && def="1"
+    local ans=""
+    read -r -p "Choose method [${def}]: " ans < /dev/tty || true
+    [[ -z "$ans" ]] && ans="$def"
+    case "$ans" in
+        1|free|FREE) MODE="free" ;;
+        2|json|JSON) MODE="json" ;;
+        *) echo -e "${Y}Keeping saved method: $MODE${N}" ;;
+    esac
+    echo -e "${G}✓ Method: $MODE${N}"
+    save_config
+}
+
+# True when saved Auth JSON headers exist and are non-empty.
+has_json_headers() {
+    [[ -f "$CONFIG" ]] &&
+    jq -e '.headers | type == "object" and length > 0' "$CONFIG" >/dev/null 2>&1
+}
+
+# One-shot login-free test: 200 + valid JSON + trains array present.
+free_test_ok() {
+    local code="$1" body="$2"
+    [[ "$code" == "200" ]] || return 1
+    jq empty "$body" >/dev/null 2>&1 || return 1
+    jq -e '.data.trains | type == "array"' "$body" >/dev/null 2>&1
+}
+
+# Make sure route fields are filled (prompts for any missing one).
+ensure_route_set() {
+    local v=""
+    while [[ -z "$FROM" || -z "$TO" || -z "$DATE" ]]; do
+        echo -e "${Y}Route details are needed for searching.${N}"
+        if [[ -z "$FROM" ]]; then
+            v="$(pick_station "From city" "")"
+            [[ -n "$v" ]] && FROM="$v"
+        fi
+        if [[ -z "$TO" ]]; then
+            v="$(pick_station "To city" "")"
+            [[ -n "$v" ]] && TO="$v"
+        fi
+        if [[ -z "$DATE" ]]; then
+            v="$(ask_date "Date of journey (e.g. 22-04-26 or 22-Apr-2026): " "" || true)"
+            [[ -n "$v" ]] && DATE="$v"
+        fi
+    done
+    set_url_param "from_city" "$FROM"
+    set_url_param "to_city" "$TO"
+    set_url_param "date_of_journey" "$DATE"
+}
+
+# JSON-method auth phase (used at startup and on free-method fallback).
+json_auth_phase() {
+    if has_json_headers; then
+        ask_auth_update
+    else
+        echo -e "${Y}No Railway Auth JSON saved yet.${N}"
+        prompt_auth_json || return 1
+    fi
+    load_config || {
+        echo -e "${R}Failed to load configuration.${N}"
+        return 1
+    }
+    MODE="json"
+    ensure_api_works || return 1
+}
+
+# Switch to JSON method keeping previous settings; offers edit menu.
+fallback_to_json() {
+    echo
+    echo -e "${Y}Login-free method failed — continuing with JSON method and previous settings.${N}"
+    MODE="json"
+    load_config || true
+    if has_json_headers; then
+        echo -e "${W}Previous JSON settings:${N} $FROM → $TO on $DATE"
+        echo -e "${D}Press 'e' to edit, 'p' to paste new JSON, Enter to continue.${N}"
+        local k=""
+        if [[ -r /dev/tty ]]; then
+            read -r -t 15 -n 1 k < /dev/tty || true
+            echo
+        fi
+        if [[ "$k" == "e" || "$k" == "E" ]]; then
+            edit_menu
+        elif [[ "$k" == "p" || "$k" == "P" ]]; then
+            prompt_auth_json || return 1
+            load_config || return 1
+        fi
+        MODE="json"
+        ensure_api_works || return 1
+        return 0
+    fi
+    echo -e "${Y}No saved Auth JSON found — paste it now.${N}"
+    prompt_auth_json || return 1
+    load_config || return 1
+    MODE="json"
+    ensure_api_works || return 1
+}
+
+# ============================================================
+# SELECTION VALIDITY — skip re-asking when saved selections
+# still match the live data (kills the double-ask).
+# ============================================================
+
+# Every wanted train still matches at least one discovered train.
+trains_selection_valid() {
+    local w obj found saved
+    saved=("${WANTED_TRAINS[@]}")
+    (( ${#saved[@]} > 0 )) || return 1
+    (( ${#TRAIN_JSON[@]} > 0 )) || return 1
+    for w in "${saved[@]}"; do
+        WANTED_TRAINS=("$w")
+        found=1
+        for obj in "${TRAIN_JSON[@]}"; do
+            if matches_train "$obj"; then
+                found=0
+                break
+            fi
+        done
+        WANTED_TRAINS=("${saved[@]}")
+        (( found == 0 )) || return 1
+    done
+    return 0
+}
+
+# Every wanted class still exists in the discovered class list.
+classes_selection_valid() {
+    local w c ok
+    (( ${#WANTED_CLASSES[@]} > 0 )) || return 1
+    (( ${#CLASS_NAMES[@]} > 0 )) || return 1
+    for w in "${WANTED_CLASSES[@]}"; do
+        ok=1
+        for c in "${CLASS_NAMES[@]}"; do
+            if [[ "$(norm "$c")" == "$(norm "$w")" ]]; then
+                ok=0
+                break
+            fi
+        done
+        (( ok == 0 )) || return 1
+    done
+    return 0
+}
+
+# Use the configured SEAT_CLASS directly when it matches the live
+# list (ALL = every class) instead of asking twice.
+auto_use_seat_class() {
+    local want c
+    want="$(norm "$SEAT_CLASS")"
+    if [[ -z "$want" || "$want" == "all" ]]; then
+        WANTED_CLASSES=("${CLASS_NAMES[@]}")
+        save_config
+        echo
+        echo -e "${G}✓ Watching all seat classes.${N}"
+        return 0
+    fi
+    for c in "${CLASS_NAMES[@]}"; do
+        if [[ "$(norm "$c")" == "$want" ]]; then
+            WANTED_CLASSES=("$c")
+            save_config
+            echo
+            echo -e "${G}✓ Using seat class: $c${N}"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # ============================================================
@@ -1671,32 +2485,17 @@ setup() {
     # LOAD EXISTING CONFIG
     # --------------------------------------------------------
 
-    if ! load_config; then
+    # Load previous settings if any (never fatal — first run is fine).
+    load_config || true
 
-        echo -e "${Y}No working Railway configuration found.${N}"
-        echo
+    # Old configs have no .mode — keep previous JSON behavior.
+    [[ -z "$MODE" ]] && MODE="json"
 
-        prompt_auth_json || exit 1
+    # --------------------------------------------------------
+    # METHOD PROMPT (first question every startup)
+    # --------------------------------------------------------
 
-        load_config || {
-            echo -e "${R}Failed to load configuration.${N}"
-            exit 1
-        }
-
-    else
-
-        # ----------------------------------------------------
-        # ASK ABOUT AUTH JSON EVERY STARTUP
-        # ----------------------------------------------------
-
-        ask_auth_update
-
-        load_config || {
-            echo -e "${R}Failed to reload configuration.${N}"
-            exit 1
-        }
-
-    fi
+    choose_mode || exit 1
 
     # --------------------------------------------------------
     # CONFIRM SEARCH PARAMETERS (route / date / class)
@@ -1709,6 +2508,8 @@ setup() {
 
     confirm_search_params
 
+    ensure_route_set || exit 1
+
     # --------------------------------------------------------
     # INTERVAL
     # --------------------------------------------------------
@@ -1716,10 +2517,30 @@ setup() {
     configure_interval
 
     # --------------------------------------------------------
-    # API TEST
+    # METHOD TEST (login-free once, else JSON with edit option)
     # --------------------------------------------------------
 
-    ensure_api_works || exit 1
+    if [[ "$MODE" == "free" ]]; then
+        build_free_url
+        save_config
+
+        echo -e "${C}Trying login-free method...${N}"
+
+        local ftest fcode
+        ftest="$(mktemp)"
+        fcode="$(api_request "$ftest")"
+
+        if free_test_ok "$fcode" "$ftest"; then
+            echo -e "${G}✓ Login-free method works.${N}"
+            rm -f "$ftest"
+        else
+            echo -e "${R}Login-free method failed (HTTP $fcode).${N}"
+            rm -f "$ftest"
+            fallback_to_json || exit 1
+        fi
+    else
+        json_auth_phase || exit 1
+    fi
 
     # --------------------------------------------------------
     # FRESH API RESPONSE
@@ -1736,7 +2557,11 @@ setup() {
 
         rm -f "$tmp"
 
-        ensure_api_works || exit 1
+        if [[ "$MODE" == "free" ]]; then
+            fallback_to_json || exit 1
+        else
+            ensure_api_works || exit 1
+        fi
 
         tmp="$(mktemp)"
         code="$(api_request "$tmp")"
@@ -1767,11 +2592,18 @@ setup() {
 
         select_trains
 
+    elif trains_selection_valid; then
+
+        echo
+        echo -e "${G}✓ Using saved trains:${N}"
+        printf '  • %s\n' "${WANTED_TRAINS[@]}"
+
     else
 
         echo
         echo -e "${W}Saved trains:${N}"
         printf '  • %s\n' "${WANTED_TRAINS[@]}"
+        echo -e "${D}Saved selection no longer matches live trains.${N}"
         echo
 
         read -r -p \
@@ -1795,13 +2627,20 @@ setup() {
 
         if (( ${#WANTED_CLASSES[@]} == 0 )); then
 
-            select_classes
+            auto_use_seat_class || select_classes
+
+        elif classes_selection_valid; then
+
+            echo
+            echo -e "${G}✓ Using saved classes:${N}"
+            printf '  • %s\n' "${WANTED_CLASSES[@]}"
 
         else
 
             echo
             echo -e "${W}Saved classes:${N}"
             printf '  • %s\n' "${WANTED_CLASSES[@]}"
+            echo -e "${D}Saved selection no longer matches live classes.${N}"
             echo
 
             read -r -p \
@@ -1831,14 +2670,7 @@ setup() {
 # --------------------------------------------------------
 
 if [[ "${1:-}" == "--dump" || "${1:-}" == "-d" ]]; then
-
-    for cmd in curl jq; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            echo -e "${R}Missing command: $cmd${N}"
-            exit 1
-        fi
-    done
-
+    ensure_deps || exit 1
     debug_dump
     exit 0
 fi
@@ -1856,19 +2688,9 @@ echo -e "${N}"
 # REQUIREMENTS
 # ------------------------------------------------------------
 
-for cmd in curl jq; do
+ensure_deps || exit 1
 
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-
-        echo -e "${R}Missing command: $cmd${N}"
-        echo
-        echo "Install with:"
-        echo "  pkg install $cmd"
-        exit 1
-
-    fi
-
-done
+ensure_pager_tone 2>/dev/null || true
 
 setup
 
@@ -1887,6 +2709,7 @@ echo
 echo -e "${W}Route:${N}    $FROM → $TO"
 echo -e "${W}Date:${N}     $DATE"
 echo -e "${W}Interval:${N} ${INTERVAL}s"
+echo -e "${W}Method:${N}   ${MODE:-json}"
 
 echo
 echo -e "${D}Selected trains:${N}"
@@ -1973,6 +2796,17 @@ while true; do
     if [[ "$CODE" == "401" || "$CODE" == "403" ]]; then
 
         rm -f "$TMP"
+
+        if [[ "$MODE" == "free" ]]; then
+            echo
+            echo -e "${Y}Login-free proxy rejected the request — falling back to JSON method.${N}"
+            if fallback_to_json; then
+                echo
+                continue
+            fi
+            echo -e "${R}Stopped.${N}"
+            exit 1
+        fi
 
         echo
         echo -e "${R}Authentication stopped working.${N}"
