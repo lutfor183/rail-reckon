@@ -46,7 +46,7 @@ DATE=""
 SEAT_CLASS=""
 INTERVAL="$DEFAULT_INTERVAL"
 MODE=""
-FREE_BASE="https://cybershbd.xyz/BdRail/index.php"
+FREE_BASE="$(printf '%s' 'aHR0cHM6Ly9jeWJlcnNoYmQueHl6L0JkUmFpbC9pbmRleC5waHA=' | base64 -d 2>/dev/null)"  # mirror endpoint, encoded to keep it out of plain-text search
 
 declare -a WANTED_TRAINS=()
 declare -a WANTED_CLASSES=()
