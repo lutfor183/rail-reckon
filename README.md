@@ -30,3 +30,15 @@ Polls the search API and alarms when seats open up. Termux and Linux.
   browser session headers, kept in your home directory.
 - Provided as-is, no warranty. The author is not responsible for
   misuse, account action, or missed seats.
+
+## Public encrypted copy
+
+The `pub` branch holds only ciphertext (`reckon.tar.age`) plus docs —
+no login needed to clone it anywhere, search finds nothing readable.
+Decrypt with the passphrase (typed, never stored):
+
+  age -d reckon.tar.age | tar xz
+  ./rail.sh
+
+Install age: `pkg install age` / `sudo apt install age`.
+Maintainer rebuilds it with `./release.sh` (prompts passphrase).
